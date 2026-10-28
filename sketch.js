@@ -1407,14 +1407,12 @@ class Game {
     this.drawLabel("MAP SELECT", 34, CREAM, WORLD_W / 2, 78, CENTER);
     this.drawLabel("Choose a shared stage · both players confirm with E / N", 15, [205, 207, 216], WORLD_W / 2, 112, CENTER);
     const cardW = 520, cardH = 220;
-    const mx = (mouseX - offsetX) / scaleFactor, my = (mouseY - offsetY) / scaleFactor;
     for (let i = 0; i < MAP_LAYOUTS.length; i += 1) {
       const x = 90 + (i % 2) * 600;
       const cardY = 155 + Math.floor(i / 2) * 245;
       const p1 = this.mapSelection[0] === i, p2 = this.mapSelection[1] === i;
-      const hovered = mx >= x && mx <= x + cardW && my >= cardY && my <= cardY + cardH;
-      const shared = (p1 && p2) || (hovered && (p1 || p2));
-      const active = p1 || p2 || hovered;
+      const shared = p1 && p2;
+      const active = p1 || p2;
       noStroke(); fill(13, 15, 26, 235); rect(x, cardY, cardW, cardH, 13);
       if (shared) {
         drawingContext.save(); drawingContext.shadowBlur = 25; drawingContext.shadowColor = "rgba(255,193,83,0.9)";
@@ -1425,9 +1423,6 @@ class Game {
         drawingContext.save(); drawingContext.shadowBlur = 25;
         drawingContext.shadowColor = p1 ? "rgba(255,193,83,0.95)" : "rgba(112,221,222,0.95)";
         const tint = p1 ? GOLD : CYAN; fill(tint[0], tint[1], tint[2], 100); rect(x + 2, cardY + 2, cardW - 4, cardH - 4, 11); drawingContext.restore();
-      } else if (hovered) {
-        drawingContext.save(); drawingContext.shadowBlur = 18; drawingContext.shadowColor = "rgba(255,255,255,0.75)";
-        fill(225, 231, 244, 70); rect(x + 2, cardY + 2, cardW - 4, cardH - 4, 11); drawingContext.restore();
       }
       stroke(active ? 245 : 93, active ? 230 : 100, active ? 196 : 120); strokeWeight(active ? 2.5 : 1); noFill(); rect(x, cardY, cardW, cardH, 13);
       noStroke(); this.drawLabel(MAP_LAYOUTS[i].name, 19, CREAM, x + cardW / 2, cardY + 18, CENTER);
@@ -1534,15 +1529,12 @@ class Game {
     const labels = ["PLAY", "PRACTICE MODE", "CHARACTER SELECT", "MAP SELECT"];
     const descriptions = ["Start a standard match", "Infinite ultimate · test moves", "Choose Ballhog or Archive", "Choose a floating platform layout"];
     const x = 58, y = 320, w = 342, h = 56, gap = 8;
-    const mx = (mouseX - offsetX) / scaleFactor;
-    const my = (mouseY - offsetY) / scaleFactor;
     for (let i = 0; i < labels.length; i += 1) {
       const by = y + i * (h + gap);
       const p1 = this.menuSelection[0] === i;
       const p2 = this.menuSelection[1] === i;
-      const hovered = mx >= x && mx <= x + w && my >= by && my <= by + h;
-      const shared = (p1 && p2) || (hovered && (p1 || p2));
-      const active = p1 || p2 || hovered;
+      const shared = p1 && p2;
+      const active = p1 || p2;
       noStroke(); fill(12, 13, 23, 245); rect(x, by, w, h, 10);
       if (shared) {
         drawingContext.save(); drawingContext.shadowBlur = 20;
@@ -1557,8 +1549,6 @@ class Game {
         drawingContext.shadowColor = p1 ? "rgba(255,193,83,0.95)" : "rgba(112,221,222,0.95)";
         fill(tint[0], tint[1], tint[2], 145); rect(x + 2, by + 2, w - 4, h - 4, 8);
         drawingContext.restore();
-      } else if (hovered) {
-        fill(220, 230, 245, 75); rect(x + 2, by + 2, w - 4, h - 4, 8);
       }
       stroke(active ? 245 : 100, active ? 233 : 100, active ? 198 : 115);
       strokeWeight(active ? 2 : 1); noFill(); rect(x, by, w, h, 10);
@@ -2267,27 +2257,9 @@ function drawStudyDiagram(subjectKey, x, y, w, h) {
   pop();
 }
 
-function mousePressed() {
-  if (!studyMode) return;
-  const sidebarW = Math.min(226, width * 0.22);
-  let tabX = sidebarW + 34;
-  const tabs = [
-    { key: "math", width: 76 },
-    { key: "science", width: 88 },
-    { key: "social", width: 124 },
-  ];
-  for (const tab of tabs) {
-    if (mouseX >= tabX && mouseX <= tabX + tab.width && mouseY >= 177 && mouseY <= 207) {
-      studyTab = tab.key;
-      return false;
-    }
-    tabX += tab.width + 8;
-  }
-  return false;
-}
-
 function setup() {
   createCanvas(windowWidth, windowHeight);
+  noCursor();
   pixelDensity(1);
   frameRate(FPS_LIMIT);
   textFont("Arial");
@@ -2370,7 +2342,12 @@ function keyPressed(event) {
     return false;
   }
 
-  if (studyMode) return false;
+  if (studyMode) {
+    if (pressed === "1") studyTab = "math";
+    else if (pressed === "2") studyTab = "science";
+    else if (pressed === "3") studyTab = "social";
+    return false;
+  }
 
   if (pressed === "backspace" && !game.started) {
     game.menuPage = "main";
