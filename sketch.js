@@ -1,10 +1,11 @@
 // Ballhog vs Archive — local two-player platform fighter for p5.js 2.x.
-// Controls: P1 A/D move, W jump, S+W drop, hold/release E for charged attack, F super.
-//           P2 arrows move/jump/drop, N attack, M super.
+// Controls: P1 A/D move, W double jump, hold S for shield, S+W drops through, E attack, F super.
+//           P2 arrows move/double jump, hold down for shield, down+up drops through, N attack, M super.
 
 const WORLD_W = 1280;
 const WORLD_H = 760;
 const FLOOR_Y = 638;
+const GAME_VERSION = "3.1";
 const FPS_LIMIT = 60;
 const BALLHOG_MAX_CHARGE_SECONDS = 1.5;
 const BALLHOG_MAX_CHARGE_DAMAGE = 2.5;
@@ -13,6 +14,9 @@ const BALLHOG_SWING_DURATION = 0.62;
 const BALLHOG_SWING_ROTATION = 125 * Math.PI / 180;
 const BALLHOG_HIT_ROTATION = Math.PI / 4;
 const BEAM_CLASH_WINDOW = 0.35;
+const MAX_AIR_JUMPS = 2;
+const SHIELD_SUPER_DRAIN_PER_SECOND = 42;
+const SHIELD_HEAL_PER_SECOND = 12;
 
 const INK = [15, 14, 23];
 const CREAM = [246, 238, 220];
@@ -95,6 +99,9 @@ class Fighter {
     this.groundY = FLOOR_Y;
     this.coyote = 0.11;
     this.jumpBuffer = 0;
+    this.jumpsUsed = 0;
+    this.shielding = false;
+    this.shieldLockedUntilRelease = false;
     this.attackCooldown = 0;
     this.attackTime = -1;
     this.attackResolved = false;
@@ -211,7 +218,7 @@ class Game {
 
   startAttack(fighter) {
     if (this.beamClash) { this.clashPress(fighter); return; }
-    if (this.winner || fighter.attackCooldown > 0 || fighter.hitstun > 0 || fighter.superTime > 0) return;
+    if (this.winner || fighter.shielding || fighter.attackCooldown > 0 || fighter.hitstun > 0 || fighter.superTime > 0) return;
     if (fighter.character === "BALLHOG") {
       this.startBallhogCharge(fighter);
       return;
@@ -223,7 +230,7 @@ class Game {
   }
 
   startBallhogCharge(fighter) {
-    if (this.winner || fighter.chargingAttack || fighter.attackCooldown > 0 || fighter.hitstun > 0 || fighter.superTime > 0) return;
+    if (this.winner || fighter.shielding || fighter.chargingAttack || fighter.attackCooldown > 0 || fighter.hitstun > 0 || fighter.superTime > 0) return;
     fighter.chargingAttack = true;
     fighter.chargeTime = 0;
     fighter.attackDamageMultiplier = 1;
@@ -253,7 +260,7 @@ class Game {
   }
 
   activateSuper(fighter) {
-    if (this.winner || fighter.chargingAttack || fighter.superCharge < 100 || fighter.superTime > 0 || fighter.hitstun > 0) return;
+    if (this.winner || fighter.shielding || fighter.chargingAttack || fighter.superCharge < 100 || fighter.superTime > 0 || fighter.hitstun > 0) return;
     fighter.superCharge = 0;
     fighter.superTime = 0.62;
     fighter.superResolved = false;
@@ -341,6 +348,12 @@ class Game {
 
   moveFighter(fighter, opponent, dt) {
     const keys = this.movementKeys(fighter);
+    if (fighter.shielding) {
+      fighter.vx = 0;
+      fighter.vy = 0;
+      fighter.jumpBuffer = 0;
+      return;
+    }
     const direction = Number(keys.right) - Number(keys.left);
 
     if (direction !== 0 && !fighter.attackLockedFacing) fighter.facing = direction;
@@ -348,16 +361,22 @@ class Game {
       fighter.facing = opponent.x >= fighter.x ? 1 : -1;
     }
 
-    if (fighter.grounded) fighter.coyote = 0.11;
+    if (fighter.grounded) {
+      fighter.coyote = 0.11;
+      fighter.jumpsUsed = 0;
+    }
     else fighter.coyote = Math.max(0, fighter.coyote - dt);
     fighter.jumpBuffer = Math.max(0, fighter.jumpBuffer - dt);
 
-    if (fighter.jumpBuffer > 0 && fighter.coyote > 0 && fighter.hitstun <= 0) {
+    if (fighter.jumpBuffer > 0 && fighter.hitstun <= 0 && fighter.jumpsUsed < MAX_AIR_JUMPS && (fighter.coyote > 0 || fighter.jumpsUsed > 0)) {
+      const isDoubleJump = fighter.jumpsUsed > 0;
       fighter.vy = -735;
       fighter.grounded = false;
+      fighter.jumpsUsed += 1;
       fighter.coyote = 0;
       fighter.jumpBuffer = 0;
-      this.addBurst(fighter.x, fighter.bottom - 4, [194, 158, 129], 5, 90);
+      this.addBurst(fighter.x, fighter.bottom - 4, isDoubleJump ? fighter.accent : [194, 158, 129], isDoubleJump ? 10 : 5, isDoubleJump ? 145 : 90);
+      if (isDoubleJump) this.addText("DOUBLE JUMP", fighter.x, fighter.bottom - fighter.h - 12, fighter.accent);
     }
 
     // Let movement input select the attack direction during its wind-up.
@@ -401,6 +420,11 @@ class Game {
 
   takeHit(target, attacker, amount, direction, message = null, dot = false) {
     if (target.health <= 0 || (!dot && target.invulnerable > 0)) return false;
+    if (!dot && target.shielding) {
+      this.addText("BLOCKED", target.x, target.chestY - 16, target.accent);
+      this.addBurst(target.x, target.chestY, target.accent, 8, 150);
+      return false;
+    }
     target.health = Math.max(0, target.health - amount);
     if (!dot) {
       target.invulnerable = 0.30;
@@ -481,7 +505,7 @@ class Game {
 
   applyPoison(target, attacker) {
     const poisonWasActive = target.poisonTime > 0 && target.poisonStacks > 0;
-    target.poisonStacks = Math.min(3, target.poisonStacks + 1);
+    target.poisonStacks = Math.min(4, target.poisonStacks + 1);
     target.poisonTime = 10;
     if (!poisonWasActive) target.poisonTick = 1;
     target.poisonDps = 0.9 * target.poisonStacks;
@@ -500,6 +524,22 @@ class Game {
       fighter.superCharge = Math.min(100, fighter.superCharge + dt * passiveSuperRate);
     }
 
+    const keys = this.movementKeys(fighter);
+    const dropThrough = keys.down && keys.up && fighter.grounded && fighter.groundY !== FLOOR_Y;
+    if (!keys.down) fighter.shieldLockedUntilRelease = false;
+    const canStartShield = keys.down && !dropThrough && !fighter.shieldLockedUntilRelease
+      && fighter.superCharge > 0 && !fighter.chargingAttack && fighter.attackTime < 0
+      && fighter.superTime <= 0 && fighter.hitstun <= 0;
+    fighter.shielding = canStartShield;
+    if (fighter.shielding) {
+      fighter.superCharge = Math.max(0, fighter.superCharge - SHIELD_SUPER_DRAIN_PER_SECOND * dt);
+      fighter.health = Math.min(100, fighter.health + SHIELD_HEAL_PER_SECOND * dt);
+      if (fighter.superCharge <= 0) {
+        fighter.shielding = false;
+        fighter.shieldLockedUntilRelease = true;
+      }
+    }
+
     if (fighter.chargingAttack) {
       fighter.chargeTime = Math.min(BALLHOG_MAX_CHARGE_SECONDS, fighter.chargeTime + dt);
     }
@@ -512,8 +552,8 @@ class Game {
         const poisonSource = fighter.poisonSourcePlayer === 1 ? this.p1 : this.p2;
         fighter.health = Math.max(0, fighter.health - fighter.poisonDps);
         if (poisonSource.character === "ARCHIVE") {
-          // Each active stack adds super charge, so a full three-stack poison
-          // pays Archive 6 meter per second while it deals 2.7 damage per tick.
+          // Each active stack adds super charge, so a full four-stack poison
+          // pays Archive 8 meter per second while it deals 3.6 damage per tick.
           poisonSource.superCharge = Math.min(100, poisonSource.superCharge + fighter.poisonStacks * 2);
         }
         this.addText(`POISON x${fighter.poisonStacks} -${fighter.poisonDps.toFixed(1)}`, fighter.x, fighter.chestY - 25, CYAN);
@@ -742,6 +782,21 @@ class Game {
     noStroke();
     fill(12, 12, 20, 180);
     ellipse(x, FLOOR_Y + 1, shadowW, 12);
+    if (!preview && f.shielding) {
+      const pulse = 0.5 + 0.5 * Math.sin(f.animationTime * 9);
+      drawingContext.save();
+      drawingContext.shadowBlur = 22;
+      drawingContext.shadowColor = `rgba(${f.accent[0]},${f.accent[1]},${f.accent[2]},0.85)`;
+      fill(f.accent[0], f.accent[1], f.accent[2], 24 + pulse * 20);
+      stroke(f.accent[0], f.accent[1], f.accent[2], 195);
+      strokeWeight(2.5);
+      ellipse(x, foot - f.h * 0.53, f.w + 38 + pulse * 7, f.h + 30 + pulse * 8);
+      noFill();
+      stroke(235, 247, 255, 95 + pulse * 70);
+      strokeWeight(1);
+      ellipse(x, foot - f.h * 0.53, f.w + 26 + pulse * 5, f.h + 18 + pulse * 5);
+      drawingContext.restore();
+    }
 
     const hipY = bodyBottom - 2;
     if (f.character === "BALLHOG") {
@@ -981,7 +1036,7 @@ class Game {
     if (f.poisonTime > 0) {
       noStroke();
       fill(...CYAN);
-      for (let i = 0; i < 3; i += 1) {
+      for (let i = 0; i < Math.min(4, f.poisonStacks); i += 1) {
         const px = x + Math.sin(millis() / 130 + i * 2) * 18;
         const py = f.bottom - 42 - ((millis() / 5 + i * 23) % 54);
         ellipse(px, py, 6);
@@ -1399,45 +1454,80 @@ class Game {
   drawCharacterSelectScreen() {
     image(backgroundLayers[this.mapIndex] || backgroundLayers[0], 0, 0);
     for (const platform of this.platforms) this.drawPlatform(platform);
-    noStroke(); fill(10, 9, 18, 190); rect(0, 0, WORLD_W, WORLD_H);
-    this.drawLabel("CHARACTER SELECT", 34, CREAM, WORLD_W / 2, 90, CENTER);
-    this.drawLabel("Each keyboard side chooses its fighter", 16, [202, 195, 188], WORLD_W / 2, 132, CENTER);
-    const p1 = this.createFighter(this.characterChoices[0], 1, 390);
-    const p2 = this.createFighter(this.characterChoices[1], 2, 890);
-    p1.animationTime = millis() / 1000; p2.animationTime = millis() / 1000 + 1;
-    this.drawFighter(p1, 390, true); this.drawFighter(p2, 890, true);
-    drawingContext.save();
-    drawingContext.shadowBlur = 24; drawingContext.shadowColor = "rgba(255,193,83,0.8)";
-    noFill(); stroke(GOLD); strokeWeight(2.5); rect(100, 190, 580, 330, 14);
-    drawingContext.shadowColor = "rgba(112,221,222,0.8)";
-    stroke(CYAN); rect(700, 190, 480, 330, 14);
-    drawingContext.restore();
-    noStroke();
-    this.drawLabel("P1 · WASD + E / F", 18, GOLD, 390, 216, CENTER);
-    this.drawLabel(this.characterChoices[0], 30, this.characterChoices[0] === "BALLHOG" ? GOLD : CYAN, 390, 270, CENTER);
-    this.drawLabel("A / D TO CHANGE", 13, CREAM, 390, 500, CENTER);
-    this.drawLabel(this.characterReady[0] ? "P1 READY · PRESS E TO UNREADY" : "PRESS E TO CONFIRM", 12, GOLD, 390, 526, CENTER);
-    this.drawLabel("P2 · ARROWS + N / M", 18, CYAN, 940, 216, CENTER);
-    this.drawLabel(this.characterChoices[1], 30, this.characterChoices[1] === "BALLHOG" ? GOLD : CYAN, 940, 270, CENTER);
-    this.drawLabel("LEFT / RIGHT TO CHANGE", 13, CREAM, 940, 500, CENTER);
-    this.drawLabel(this.characterReady[1] ? "P2 READY · PRESS N TO UNREADY" : "PRESS N TO CONFIRM", 12, CYAN, 940, 526, CENTER);
-    this.drawLabel("BALLHOG", 14, GOLD, 390, 565, CENTER);
-    this.drawLabel("ARCHIVE", 14, CYAN, 940, 565, CENTER);
+    noStroke(); fill(8, 8, 17, 125); rect(0, 0, WORLD_W, WORLD_H);
+    this.drawLabel("CHOOSE YOUR FIGHTER", 35, CREAM, WORLD_W / 2, 47, CENTER);
+    this.drawLabel("Two fighters. Two styles. Pick a side and lock in.", 14, [202, 207, 219], WORLD_W / 2, 82, CENTER);
 
-    // Disabled roster preview: intentionally has no selection or gameplay path.
-    drawingContext.save();
-    drawingContext.shadowBlur = 18;
-    drawingContext.shadowColor = "rgba(150,165,190,0.35)";
-    fill(18, 23, 35, 235); stroke(111, 126, 150, 150); strokeWeight(1.5);
-    rect(WORLD_W / 2 - 150, 594, 300, 64, 12);
-    drawingContext.restore();
-    noStroke();
-    fill(79, 91, 111); ellipse(WORLD_W / 2 - 112, 626, 32);
-    fill(20, 25, 36); ellipse(WORLD_W / 2 - 112, 626, 18);
-    fill(150, 162, 181); ellipse(WORLD_W / 2 - 112, 626, 4, 6);
-    this.drawLabel("COMING SOON", 16, [183, 195, 213], WORLD_W / 2 + 20, 605, CENTER);
-    this.drawLabel("LOCKED CHARACTER PREVIEW", 9, [119, 133, 154], WORLD_W / 2 + 20, 629, CENTER);
-    this.drawLabel("BOTH PLAYERS CONFIRM WITH E / N     ·     BACKSPACE TO MENU", 16, [255, 236, 196], WORLD_W / 2, 686, CENTER);
+    const cards = [
+      { player: 0, x: 68, center: 343, frame: GOLD, side: "PLAYER 1  ·  WASD" },
+      { player: 1, x: 657, center: 937, frame: CYAN, side: "PLAYER 2  ·  ARROW KEYS" },
+    ];
+    const cardY = 116, cardW = 555, cardH = 536;
+    for (const card of cards) {
+      const character = this.characterChoices[card.player];
+      const fighter = this.createFighter(character, card.player + 1, card.center);
+      fighter.animationTime = millis() / 1000 + card.player * 0.8;
+      fighter.facing = card.player === 0 ? 1 : -1;
+      const isBallhog = character === "BALLHOG";
+      const role = isBallhog ? "HEAVY HITTER" : "FAST STRIKER";
+      const passive = isBallhog ? "RAF SIMONS RAGE" : "ARCHIVE OVER TIME";
+      const passiveDescription = isBallhog
+        ? "Every hit taken raises his damage by 15%."
+        : "Poison stacks to 4 and poison ticks charge super.";
+
+      drawingContext.save();
+      drawingContext.shadowBlur = 22;
+      drawingContext.shadowColor = `rgba(${card.frame[0]},${card.frame[1]},${card.frame[2]},0.42)`;
+      fill(10, 12, 22, 238);
+      stroke(card.frame[0], card.frame[1], card.frame[2], 190);
+      strokeWeight(1.7);
+      rect(card.x, cardY, cardW, cardH, 18);
+      drawingContext.restore();
+      noStroke();
+      fill(card.frame[0], card.frame[1], card.frame[2], 150);
+      rect(card.x + 20, cardY + 3, cardW - 40, 3, 2);
+
+      this.drawLabel(card.side, 13, card.frame, card.center, 133, CENTER);
+      this.drawLabel(character, 29, fighter.accent, card.center, 161, CENTER);
+      this.drawLabel(role, 11, [202, 208, 220], card.center, 188, CENTER);
+
+      const halo = 34 + Math.round(12 * Math.sin(millis() / 360 + card.player));
+      drawingContext.save();
+      drawingContext.shadowBlur = 24;
+      drawingContext.shadowColor = `rgba(${fighter.accent[0]},${fighter.accent[1]},${fighter.accent[2]},0.75)`;
+      noStroke();
+      fill(fighter.accent[0], fighter.accent[1], fighter.accent[2], 20);
+      ellipse(card.center, 333, 160 + halo, 220 + halo);
+      noFill();
+      stroke(fighter.accent[0], fighter.accent[1], fighter.accent[2], 85);
+      strokeWeight(1.5);
+      ellipse(card.center, 333, 190 + halo, 250 + halo);
+      drawingContext.restore();
+
+      push();
+      translate(card.center, 470);
+      scale(1.55);
+      translate(-card.center, -FLOOR_Y);
+      this.drawFighter(fighter, card.center, true);
+      pop();
+
+      this.drawLabel(passive, 13, fighter.accent, card.center, 488, CENTER);
+      this.drawLabel(passiveDescription, 11, [203, 207, 218], card.center, 507, CENTER);
+      const statRows = [
+        { label: "POWER", value: isBallhog ? 0.92 : 0.60, y: 535 },
+        { label: "SPEED", value: isBallhog ? 0.62 : 0.94, y: 554 },
+      ];
+      for (const stat of statRows) {
+        this.drawLabel(stat.label, 9, [164, 174, 192], card.center - 112, stat.y, RIGHT);
+        noStroke(); fill(39, 43, 57); rect(card.center - 100, stat.y + 2, 200, 7, 4);
+        fill(...fighter.accent); rect(card.center - 100, stat.y + 2, 200 * stat.value, 7, 4);
+      }
+      this.drawLabel(card.player === 0 ? "A / D CHANGE  ·  E CONFIRM" : "← / → CHANGE  ·  N CONFIRM", 11, CREAM, card.center, 592, CENTER);
+      const ready = this.characterReady[card.player];
+      this.drawLabel(ready ? `PLAYER ${card.player + 1} READY · PRESS ${card.player === 0 ? "E" : "N"} TO UNREADY` : `PRESS ${card.player === 0 ? "E" : "N"} TO LOCK IN`, 12, card.frame, card.center, 619, CENTER);
+    }
+    this.drawLabel("DOUBLE JUMP: TAP JUMP AGAIN IN AIR  ·  HOLD S / ↓ TO BLOCK + HEAL USING SUPER", 12, [231, 222, 205], WORLD_W / 2, 688, CENTER);
+    this.drawLabel("BOTH PLAYERS CONFIRM WITH E / N     ·     BACKSPACE TO MENU", 12, [177, 188, 204], WORLD_W / 2, 713, CENTER);
   }
 
   drawMenuButtons() {
@@ -1491,7 +1581,7 @@ class Game {
     this.drawLabel("VS", 20, CREAM, WORLD_W / 2, 96, CENTER);
     this.drawLabel("ARCHIVE", 48, CYAN, WORLD_W / 2 + 165, 78, CENTER);
     this.drawLabel("Pick your fighter. Pick your arena. Settle it.", 15, [223, 211, 198], WORLD_W / 2, 137, CENTER);
-    this.drawLabel("VERSION 3.0", 12, [202, 208, 220], WORLD_W - 30, 24, RIGHT);
+    this.drawLabel(`VERSION ${GAME_VERSION}`, 12, [202, 208, 220], WORLD_W - 30, 24, RIGHT);
 
     // Character previews remain on the menu backdrop behind the information cards.
     this.drawFighter(this.p1, 390, true);
@@ -1509,16 +1599,18 @@ class Game {
     noStroke();
 
     this.drawLabel("PLAYER 1  ·  " + this.p1.name, 19, this.p1.accent, p1X + 18, cardY + 18);
-    this.drawLabel("A / D MOVE     W JUMP     S + W DROP", 12, CREAM, p1X + 18, cardY + 55);
+    this.drawLabel("A / D MOVE   W DOUBLE JUMP   S + W DROP", 11, CREAM, p1X + 18, cardY + 55);
     this.drawLabel((this.p1.character === "BALLHOG" ? "HOLD E + RELEASE  ·  CHARGED ATTACK" : "E  ·  NORMAL ATTACK"), 12, [226, 215, 198], p1X + 18, cardY + 82);
     this.drawLabel("F  ·  " + (this.p1.character === "BALLHOG" ? "BLASSIC BLAST" : "SLIMANE SPEAR"), 12, [226, 215, 198], p1X + 18, cardY + 107);
-    this.drawLabel(this.p1.character === "BALLHOG" ? "Super builds by dealing and taking damage." : "Super builds from normal hits and poison.", 11, [177, 190, 190], p1X + 18, cardY + 142);
+    this.drawLabel(this.p1.character === "BALLHOG" ? "Super builds slowly; dealing hits adds more." : "Poison stacks to 4 and its ticks charge super.", 10, [177, 190, 190], p1X + 18, cardY + 142);
+    this.drawLabel("HOLD S  ·  BLOCK + HEAL USING SUPER", 10, [190, 213, 231], p1X + 18, cardY + 165);
 
     this.drawLabel("PLAYER 2  ·  " + this.p2.name, 19, this.p2.accent, p2X + 18, cardY + 18);
-    this.drawLabel("← / → MOVE     ↑ JUMP     ↓ + ↑ DROP", 12, CREAM, p2X + 18, cardY + 55);
+    this.drawLabel("← / → MOVE   ↑ DOUBLE JUMP   ↓ + ↑ DROP", 11, CREAM, p2X + 18, cardY + 55);
     this.drawLabel("N  ·  NORMAL ATTACK", 12, [211, 225, 222], p2X + 18, cardY + 82);
     this.drawLabel("M  ·  " + (this.p2.character === "ARCHIVE" ? "SLIMANE SPEAR" : "BLASSIC BLAST"), 12, [211, 225, 222], p2X + 18, cardY + 107);
-    this.drawLabel(this.p2.character === "BALLHOG" ? "Super builds by dealing and taking damage." : "Super builds from normal hits and poison.", 11, [177, 190, 190], p2X + 18, cardY + 142);
+    this.drawLabel(this.p2.character === "BALLHOG" ? "Super builds slowly; dealing hits adds more." : "Poison stacks to 4 and its ticks charge super.", 10, [177, 190, 190], p2X + 18, cardY + 142);
+    this.drawLabel("HOLD ↓  ·  BLOCK + HEAL USING SUPER", 10, [190, 213, 231], p2X + 18, cardY + 165);
 
     const orbY = 523, orbH = 128;
     noStroke(); fill(13, 14, 24, 247); rect(432, orbY, 780, orbH, 13);
@@ -1581,8 +1673,8 @@ class Game {
     strokeWeight(1);
     line(0, 721, WORLD_W, 721);
     noStroke();
-    this.drawLabel("P1   A / D MOVE     W JUMP     S DROP     HOLD E + RELEASE     F SUPER", 12, [230, 202, 158], 34, 732);
-    this.drawLabel("P2   ← / → MOVE     ↑ JUMP     ↓ DROP     N ATTACK     M SUPER", 12, [160, 210, 207], WORLD_W - 34, 732, RIGHT);
+    this.drawLabel("P1  A/D MOVE  W×2 JUMP  S SHIELD  E ATTACK  F SUPER", 11, [230, 202, 158], 34, 732);
+    this.drawLabel("P2  ←/→ MOVE  ↑×2 JUMP  ↓ SHIELD  N ATTACK  M SUPER", 11, [160, 210, 207], WORLD_W - 34, 732, RIGHT);
     this.drawLabel("G FULLSCREEN · HOLD ~ + BACKSPACE TO RETURN TO MENU", 10, [194, 181, 171], WORLD_W / 2, 734, CENTER);
 
     if (this.winner) {
