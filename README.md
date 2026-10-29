@@ -1,4 +1,4 @@
-# Ballhog vs Archive · Version 3.3: shields, vfx, and more!
+# Ballhog vs Archive · Version 3.2: shields, vfx, and more!
 
 A local two-player p5.js platform fighter with four arenas, animated fighters, pickups, supers, and a new double jump and guard-heal ability.
 
