@@ -1,10 +1,10 @@
-# Ballhog vs Archive · Version 3.1
+# Ballhog vs Archive · Version 3.3: shields, vfx, and more!
 
 A local two-player p5.js platform fighter with four arenas, animated fighters, pickups, supers, and a new double jump and guard-heal ability.
 
 ## Play
 
-Open `[index.html](https://ryanjet65.github.io/BVA/?release=3.1.1)` in a browser with an internet connection. The page loads p5.js 2.3.3 from jsDelivr. GitHub Pages can host the same files directly from the repository root.
+Open `[index.html]` in a browser with an internet connection. The page loads p5.js 2.3.3 from jsDelivr. GitHub Pages can host the same files directly from the repository root.
 
 All game menus are keyboard-controlled. The mouse cursor is hidden over the game and has no GUI interactions. In the study screen, press 1 for Math, 2 for Science, or 3 for Social Science.
 
