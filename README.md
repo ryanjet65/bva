@@ -4,7 +4,7 @@ A local two-player p5.js platform fighter with four arenas, animated fighters, p
 
 ## Play
 
-Open `[index.html]` in a browser with an internet connection. The page loads p5.js 2.3.3 from jsDelivr. GitHub Pages can host the same files directly from the repository root.
+https://ryanjet65.github.io/bva/ use this link and paste into the url bar to start playing. the controlls are diferent but they are on the game if you need to learn them
 
 All game menus are keyboard-controlled. The mouse cursor is hidden over the game and has no GUI interactions. In the study screen, press 1 for Math, 2 for Science, or 3 for Social Science.
 
