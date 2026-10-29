@@ -1,27 +1,117 @@
 // Ballhog vs Archive — local two-player platform fighter for p5.js 2.x.
-// Controls: P1 A/D move, W double jump, hold S for shield, S+W drops through, E attack, F super.
-//           P2 arrows move/double jump, hold down for shield, down+up drops through, N attack, M super.
+// Controls: P1 A/D move, W double jump, Q shield, S+W drops through, E attack, R super.
+//           P2 arrows move/double jump, down+up drops through, / attack, . shield, , super.
 
 const WORLD_W = 1280;
 const WORLD_H = 760;
 const FLOOR_Y = 638;
-const GAME_VERSION = "3.1";
+const GAME_VERSION = "3.2";
 const FPS_LIMIT = 60;
 const BALLHOG_MAX_CHARGE_SECONDS = 1.5;
 const BALLHOG_MAX_CHARGE_DAMAGE = 2.5;
 const BALLHOG_MAX_CHARGE_UP_DAMAGE = 50;
-const BALLHOG_SWING_DURATION = 0.62;
+const BALLHOG_SWING_DURATION = 0.46;
 const BALLHOG_SWING_ROTATION = 125 * Math.PI / 180;
-const BALLHOG_HIT_ROTATION = Math.PI / 4;
+const BALLHOG_HIT_ROTATION = 44 * Math.PI / 180;
+const BALLHOG_SWING_EXPONENT = 4;
 const BEAM_CLASH_WINDOW = 0.35;
 const MAX_AIR_JUMPS = 2;
 const SHIELD_SUPER_DRAIN_PER_SECOND = 42;
-const SHIELD_HEAL_PER_SECOND = 12;
 
 const INK = [15, 14, 23];
 const CREAM = [246, 238, 220];
 const GOLD = [255, 193, 83];
 const CYAN = [112, 221, 222];
+
+const PLAYER2_UI_BLUE = [80, 158, 255];
+const UI_FEEDBACK_MS = 230;
+
+function drawGlowingButtonOutline(x, y, w, h, radius, playerOne, playerTwo) {
+  if (!playerOne && !playerTwo) return;
+  if (playerOne && playerTwo) {
+    const ctx = drawingContext;
+    ctx.save();
+    ctx.shadowBlur = 16;
+    ctx.shadowColor = "rgba(178,190,255,0.8)";
+    ctx.lineWidth = 3;
+    ctx.lineJoin = "round";
+    const gradient = ctx.createLinearGradient(x, y, x + w, y);
+    gradient.addColorStop(0, "rgb(255,193,83)");
+    gradient.addColorStop(0.42, "rgb(255,193,83)");
+    gradient.addColorStop(0.58, "rgb(80,158,255)");
+    gradient.addColorStop(1, "rgb(80,158,255)");
+    ctx.strokeStyle = gradient;
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(x, y, w, h, radius);
+    else ctx.rect(x, y, w, h);
+    ctx.stroke();
+    ctx.restore();
+    return;
+  }
+
+  const color = playerOne ? GOLD : PLAYER2_UI_BLUE;
+  drawingContext.save();
+  drawingContext.shadowBlur = 16;
+  drawingContext.shadowColor = "rgba(" + color[0] + "," + color[1] + "," + color[2] + ",0.9)";
+  drawingContext.lineWidth = 2.8;
+  drawingContext.strokeStyle = "rgba(" + color[0] + "," + color[1] + "," + color[2] + ",0.96)";
+  drawingContext.lineJoin = "round";
+  drawingContext.beginPath();
+  if (drawingContext.roundRect) drawingContext.roundRect(x, y, w, h, radius);
+  else drawingContext.rect(x, y, w, h);
+  drawingContext.stroke();
+  drawingContext.restore();
+}
+
+function drawGlowingButtonFill(x, y, w, h, radius, playerOne, playerTwo, alpha = 92, playerHalves = false) {
+  if (!playerOne && !playerTwo) return;
+  const paint = (color, half) => {
+    const ctx = drawingContext;
+    ctx.save();
+    if (half !== null) {
+      ctx.beginPath();
+      const clipX = half === 0 ? x - 2 : x + w / 2;
+      ctx.rect(clipX, y - 2, w / 2 + 2, h + 4);
+      ctx.clip();
+    }
+    ctx.shadowBlur = 18;
+    ctx.shadowColor = "rgba(" + color[0] + "," + color[1] + "," + color[2] + ",0.82)";
+    ctx.fillStyle = "rgba(" + color[0] + "," + color[1] + "," + color[2] + "," + (alpha / 255) + ")";
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(x + 2, y + 2, w - 4, h - 4, Math.max(3, radius - 2));
+    else ctx.rect(x + 2, y + 2, w - 4, h - 4);
+    ctx.fill();
+    ctx.restore();
+  };
+  const paintBlend = () => {
+    const ctx = drawingContext;
+    ctx.save();
+    ctx.shadowBlur = 18;
+    ctx.shadowColor = "rgba(178,190,255,0.78)";
+    const gradient = ctx.createLinearGradient(x, y, x + w, y);
+    gradient.addColorStop(0, "rgba(255,193,83," + (alpha / 255) + ")");
+    gradient.addColorStop(0.42, "rgba(255,193,83," + (alpha / 255) + ")");
+    gradient.addColorStop(0.58, "rgba(80,158,255," + (alpha / 255) + ")");
+    gradient.addColorStop(1, "rgba(80,158,255," + (alpha / 255) + ")");
+    ctx.fillStyle = gradient;
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(x + 2, y + 2, w - 4, h - 4, Math.max(3, radius - 2));
+    else ctx.rect(x + 2, y + 2, w - 4, h - 4);
+    ctx.fill();
+    ctx.restore();
+  };
+
+  if (playerHalves) {
+    if (playerOne && playerTwo) paintBlend();
+    else if (playerOne) paint(GOLD, 0);
+    else if (playerTwo) paint(PLAYER2_UI_BLUE, 1);
+  } else if (playerOne && playerTwo) {
+    paintBlend();
+  } else {
+    paint(playerOne ? GOLD : PLAYER2_UI_BLUE, null);
+  }
+}
+
 const MAP_LAYOUTS = [
   { name: "Rooftop Run", platforms: [
     { x: 0, y: FLOOR_Y, w: WORLD_W, h: WORLD_H - FLOOR_Y },
@@ -36,11 +126,10 @@ const MAP_LAYOUTS = [
     { x: 880, y: 355, w: 230, h: 20 }, { x: 500, y: 275, w: 280, h: 20 },
   ] },
   { name: "Sky Bridges", platforms: [
-    { x: 0, y: FLOOR_Y, w: WORLD_W, h: WORLD_H - FLOOR_Y },
-    { x: 130, y: 545, w: 260, h: 20 }, { x: 890, y: 545, w: 260, h: 20 },
-    { x: 455, y: 480, w: 370, h: 20 }, { x: 180, y: 390, w: 270, h: 20 },
-    { x: 830, y: 390, w: 270, h: 20 }, { x: 500, y: 305, w: 280, h: 20 },
-    { x: 390, y: 220, w: 220, h: 20 },
+    { x: 0, y: FLOOR_Y, w: WORLD_W, h: 20 },
+    // About 130 px between tiers; the bottom platform remains at FLOOR_Y.
+    { x: 0, y: 508, w: 480, h: 20 }, { x: 800, y: 508, w: 480, h: 20 },
+    { x: 100, y: 378, w: WORLD_W - 200, h: 20 },
   ] },
   { name: "Spiral Steps", platforms: [
     { x: 0, y: FLOOR_Y, w: WORLD_W, h: WORLD_H - FLOOR_Y },
@@ -73,6 +162,12 @@ function gameClamp(value, low, high) {
 function approach(value, target, amount) {
   if (value < target) return Math.min(target, value + amount);
   return Math.max(target, value - amount);
+}
+
+function exponentialSwingProgress(progress) {
+  const clampedProgress = gameClamp(progress, 0, 1);
+  return (Math.exp(BALLHOG_SWING_EXPONENT * clampedProgress) - 1)
+    / (Math.exp(BALLHOG_SWING_EXPONENT) - 1);
 }
 
 function overlaps(a, b) {
@@ -157,6 +252,10 @@ class Game {
     this.characterChoices = ["BALLHOG", "ARCHIVE"];
     this.characterReady = [false, false];
     this.menuLastMover = 0;
+    this.menuActivation = null;
+    this.pendingMenuAction = null;
+    this.pendingMapStartAt = 0;
+    this.pendingCharacterReturnAt = 0;
     this.returnMenuProgress = [0, 0];
     this.resetRound();
   }
@@ -180,6 +279,10 @@ class Game {
     this.pendingSupers = [];
     this.beamClash = null;
     this.returnMenuProgress = [0, 0];
+    this.menuActivation = null;
+    this.pendingMenuAction = null;
+    this.pendingMapStartAt = 0;
+    this.pendingCharacterReturnAt = 0;
   }
 
   requestJump(fighter) {
@@ -477,7 +580,7 @@ class Game {
       const centerX = attacker.x + attacker.facing * reach * 0.47;
       hitbox = { x: centerX - hitWidth / 2, y: attacker.chestY - 30, w: hitWidth, h: 60 };
     }
-    if (!overlaps(hitbox, target.rect)) return;
+    if (!overlaps(hitbox, target.rect)) return false;
     let amount = attacker.damage
       * (attacker.character === "BALLHOG" ? attacker.rageMultiplier : 1)
       * (attacker.character === "BALLHOG" ? attacker.attackDamageMultiplier : 1);
@@ -490,6 +593,7 @@ class Game {
       attacker.superCharge = Math.min(100, attacker.superCharge + amount * 0.5);
       this.applyPoison(target, attacker);
     }
+    return true;
   }
 
   resolveSuper(attacker, target) {
@@ -517,23 +621,20 @@ class Game {
     fighter.invulnerable = Math.max(0, fighter.invulnerable - dt);
     fighter.flash = Math.max(0, fighter.flash - dt);
     // Practice mode keeps both ultimate meters full for unlimited use.
-    if (this.practiceMode) {
-      fighter.superCharge = 100;
-    } else {
-      const passiveSuperRate = fighter.character === "BALLHOG" ? 1.1 : 0;
-      fighter.superCharge = Math.min(100, fighter.superCharge + dt * passiveSuperRate);
-    }
+    if (this.practiceMode) fighter.superCharge = 100;
 
     const keys = this.movementKeys(fighter);
     const dropThrough = keys.down && keys.up && fighter.grounded && fighter.groundY !== FLOOR_Y;
-    if (!keys.down) fighter.shieldLockedUntilRelease = false;
-    const canStartShield = keys.down && !dropThrough && !fighter.shieldLockedUntilRelease
+    const shieldHeld = fighter.player === 1
+      ? isKeyDown("KeyQ")
+      : isKeyDown("Period");
+    if (!shieldHeld) fighter.shieldLockedUntilRelease = false;
+    const canStartShield = shieldHeld && !dropThrough && !fighter.shieldLockedUntilRelease
       && fighter.superCharge > 0 && !fighter.chargingAttack && fighter.attackTime < 0
       && fighter.superTime <= 0 && fighter.hitstun <= 0;
     fighter.shielding = canStartShield;
     if (fighter.shielding) {
       fighter.superCharge = Math.max(0, fighter.superCharge - SHIELD_SUPER_DRAIN_PER_SECOND * dt);
-      fighter.health = Math.min(100, fighter.health + SHIELD_HEAL_PER_SECOND * dt);
       if (fighter.superCharge <= 0) {
         fighter.shielding = false;
         fighter.shieldLockedUntilRelease = true;
@@ -575,14 +676,14 @@ class Game {
       const activeStart = fighter.character === "BALLHOG" ? 0.45 : 0.07;
       const activeEnd = fighter.character === "BALLHOG" ? BALLHOG_SWING_DURATION : 0.17;
       const swingProgress = gameClamp(fighter.attackTime / BALLHOG_SWING_DURATION, 0, 1);
-      const easedProgress = swingProgress * swingProgress * (3 - 2 * swingProgress);
+      const easedProgress = exponentialSwingProgress(swingProgress);
       const fistReachedHitAngle = easedProgress * BALLHOG_SWING_ROTATION >= BALLHOG_HIT_ROTATION;
       const attackIsActive = ballhogStraightPunch
         ? fistReachedHitAngle
         : fighter.attackTime >= activeStart && fighter.attackTime <= activeEnd;
       if (attackIsActive && !fighter.attackResolved) {
-        fighter.attackResolved = true;
-        this.resolveAttack(fighter, opponent);
+        const connected = this.resolveAttack(fighter, opponent);
+        if (!ballhogStraightPunch || connected) fighter.attackResolved = true;
       }
       if (fighter.attackTime > (fighter.character === "BALLHOG" ? BALLHOG_SWING_DURATION : 0.27)) {
         fighter.attackTime = -1;
@@ -741,7 +842,7 @@ class Game {
   }
 
   drawPlatform(platform) {
-    if (platform.y === FLOOR_Y) return;
+
     noStroke();
     fill(29, 25, 37);
     rect(platform.x, platform.y, platform.w, platform.h, 5);
@@ -882,7 +983,7 @@ class Game {
       const arcStrength = Math.sin(attackProgress * Math.PI);
       if (f.chargedAttack && !f.attackUp && !f.attackDown) {
         // Rotate the arm around the shoulder/torso pivot through a broad swing arc.
-        const easedProgress = attackProgress * attackProgress * (3 - 2 * attackProgress);
+        const easedProgress = exponentialSwingProgress(attackProgress);
         const pivotX = bodyX + direction * 10;
         const pivotY = shoulderY + 2;
         const armAngle = -HALF_PI + easedProgress * BALLHOG_SWING_ROTATION;
@@ -1392,9 +1493,9 @@ class Game {
     this.drawLabel(`${Math.ceil(this.p1.health)}`, 12, INK, 54, 92);
     this.drawLabel(`${Math.ceil(this.p2.health)}`, 12, INK, WORLD_W - 54, 92, RIGHT);
 
-    this.drawLabel((this.p1.character === "BALLHOG" ? "BLASSIC BLAST" : "SLIMANE SPEAR") + " · F", 12, [221, 203, 174], 45, 109);
+    this.drawLabel((this.p1.character === "BALLHOG" ? "BLASSIC BLAST" : "SLIMANE SPEAR") + " · R", 12, [221, 203, 174], 45, 109);
     this.drawMeter(180, 111, 294, this.p1.superCharge, this.p1.accent);
-    this.drawLabel((this.p2.character === "ARCHIVE" ? "SLIMANE SPEAR" : "BLASSIC BLAST") + " · M", 12, [190, 212, 207], WORLD_W - 45, 109, RIGHT);
+    this.drawLabel((this.p2.character === "ARCHIVE" ? "SLIMANE SPEAR" : "BLASSIC BLAST") + " · ,", 12, [190, 212, 207], WORLD_W - 45, 109, RIGHT);
     this.drawMeter(WORLD_W - 474, 111, 294, this.p2.superCharge, this.p2.accent);
     if (this.p1.superCharge >= 100) this.drawLabel("READY", 12, GOLD, 480, 107);
     if (this.p2.superCharge >= 100) this.drawLabel("READY", 12, CYAN, WORLD_W - 480, 107, RIGHT);
@@ -1403,29 +1504,24 @@ class Game {
   drawMapSelectScreen() {
     image(backgroundLayers[this.mapIndex] || backgroundLayers[0], 0, 0);
     for (const platform of MAP_LAYOUTS[this.mapIndex].platforms) this.drawPlatform(platform);
-    noStroke(); fill(9, 10, 20, 200); rect(0, 0, WORLD_W, WORLD_H);
+    noStroke(); fill(9, 10, 20, 205); rect(0, 0, WORLD_W, WORLD_H);
     this.drawLabel("MAP SELECT", 34, CREAM, WORLD_W / 2, 78, CENTER);
-    this.drawLabel("Choose a shared stage · both players confirm with E / N", 15, [205, 207, 216], WORLD_W / 2, 112, CENTER);
+    this.drawLabel("P1: E LOCKS IN  ·  P2: / LOCKS IN  ·  OUTLINE = HOVER, COLOR FILL = SELECTED", 14, [205, 207, 216], WORLD_W / 2, 112, CENTER);
+
     const cardW = 520, cardH = 220;
     for (let i = 0; i < MAP_LAYOUTS.length; i += 1) {
       const x = 90 + (i % 2) * 600;
       const cardY = 155 + Math.floor(i / 2) * 245;
-      const p1 = this.mapSelection[0] === i, p2 = this.mapSelection[1] === i;
-      const shared = p1 && p2;
-      const active = p1 || p2;
-      noStroke(); fill(13, 15, 26, 235); rect(x, cardY, cardW, cardH, 13);
-      if (shared) {
-        drawingContext.save(); drawingContext.shadowBlur = 25; drawingContext.shadowColor = "rgba(255,193,83,0.9)";
-        fill(255, 193, 83, 110); rect(x + 2, cardY + 2, cardW / 2 - 2, cardH - 4, 11);
-        drawingContext.shadowColor = "rgba(112,221,222,0.9)"; fill(112, 221, 222, 110);
-        rect(x + cardW / 2, cardY + 2, cardW / 2 - 2, cardH - 4, 11); drawingContext.restore();
-      } else if (p1 || p2) {
-        drawingContext.save(); drawingContext.shadowBlur = 25;
-        drawingContext.shadowColor = p1 ? "rgba(255,193,83,0.95)" : "rgba(112,221,222,0.95)";
-        const tint = p1 ? GOLD : CYAN; fill(tint[0], tint[1], tint[2], 100); rect(x + 2, cardY + 2, cardW - 4, cardH - 4, 11); drawingContext.restore();
-      }
-      stroke(active ? 245 : 93, active ? 230 : 100, active ? 196 : 120); strokeWeight(active ? 2.5 : 1); noFill(); rect(x, cardY, cardW, cardH, 13);
+      const p1Hover = this.mapSelection[0] === i;
+      const p2Hover = this.mapSelection[1] === i;
+      const p1Ready = this.mapReady[0] && p1Hover;
+      const p2Ready = this.mapReady[1] && p2Hover;
+
+      noStroke(); fill(13, 15, 26, 242); rect(x, cardY, cardW, cardH, 13);
+      stroke(88, 101, 124, 170); strokeWeight(1); noFill(); rect(x, cardY, cardW, cardH, 13);
+      drawGlowingButtonFill(x, cardY, cardW, cardH, 13, p1Ready, p2Ready, 82, true);
       noStroke(); this.drawLabel(MAP_LAYOUTS[i].name, 19, CREAM, x + cardW / 2, cardY + 18, CENTER);
+
       const previewX = x + 18, previewW = cardW - 36, previewH = 132, groundY = cardY + 177;
       fill(30, 35, 51); rect(previewX, cardY + 40, previewW, previewH, 7);
       fill(87, 61, 75, 180); rect(previewX, groundY, previewW, 8, 3);
@@ -1436,14 +1532,25 @@ class Game {
         fill(157, 82, 94); rect(px, py, pw, 6, 3);
         fill(215, 147, 116, 110); rect(px + 3, py + 6, pw - 6, 4, 2);
       }
-      this.drawLabel("P1 " + (p1 ? (this.mapReady[0] ? "READY" : "HIGHLIGHT") : ""), 10, GOLD, x + 14, cardY + 195);
-      this.drawLabel("P2 " + (p2 ? (this.mapReady[1] ? "READY" : "HIGHLIGHT") : ""), 10, CYAN, x + cardW - 14, cardY + 195, RIGHT);
-      if (this.mapIndex === i) this.drawLabel("CURRENT", 9, [222, 222, 231], x + cardW / 2, cardY + 196, CENTER);
+      stroke(117, 127, 148, 100); strokeWeight(1); noFill(); rect(previewX, cardY + 40, previewW, previewH, 7);
+
+      drawGlowingButtonOutline(x, cardY, cardW, cardH, 13, p1Hover, p2Hover);
+      if (p1Ready && p2Ready) {
+        stroke(245, 247, 255, 155); strokeWeight(1.5);
+        line(x + cardW / 2, cardY + 9, x + cardW / 2, cardY + cardH - 9);
+      }
+
+      noStroke();
+      this.drawLabel("P1 " + (p1Hover ? (p1Ready ? "LOCKED IN" : "HOVERING") : ""), 10, GOLD, x + 14, cardY + 195);
+      this.drawLabel("P2 " + (p2Hover ? (p2Ready ? "LOCKED IN" : "HOVERING") : ""), 10, PLAYER2_UI_BLUE, x + cardW - 14, cardY + 195, RIGHT);
+      if (this.mapIndex === i) this.drawLabel("CURRENT", 9, [245, 239, 222], x + cardW / 2, cardY + 196, CENTER);
     }
     if (this.mapReady[0] && this.mapReady[1] && this.mapSelection[0] !== this.mapSelection[1]) {
       this.drawLabel("Choose the same map to start", 15, [255, 183, 149], WORLD_W / 2, 644, CENTER);
+    } else if (this.pendingMapStartAt) {
+      this.drawLabel("BOTH PLAYERS LOCKED IN · ENTERING ARENA", 15, CREAM, WORLD_W / 2, 644, CENTER);
     }
-    this.drawLabel("P1: WASD + E CONFIRM   ·   P2: ARROWS + N CONFIRM   ·   BACKSPACE: MENU", 13, [255, 236, 196], WORLD_W / 2, 690, CENTER);
+    this.drawLabel("P1: WASD + E CONFIRM   ·   P2: ARROWS + / CONFIRM   ·   BACKSPACE: MENU", 13, [255, 236, 196], WORLD_W / 2, 690, CENTER);
   }
 
   drawCharacterSelectScreen() {
@@ -1451,16 +1558,17 @@ class Game {
     for (const platform of this.platforms) this.drawPlatform(platform);
     noStroke(); fill(8, 8, 17, 125); rect(0, 0, WORLD_W, WORLD_H);
     this.drawLabel("CHOOSE YOUR FIGHTER", 35, CREAM, WORLD_W / 2, 47, CENTER);
-    this.drawLabel("Two fighters. Two styles. Pick a side and lock in.", 14, [202, 207, 219], WORLD_W / 2, 82, CENTER);
+    this.drawLabel("Move to hover · press your attack key to lock in.", 14, [202, 207, 219], WORLD_W / 2, 82, CENTER);
 
     const cards = [
       { player: 0, x: 68, center: 343, frame: GOLD, side: "PLAYER 1  ·  WASD" },
-      { player: 1, x: 657, center: 937, frame: CYAN, side: "PLAYER 2  ·  ARROW KEYS" },
+      { player: 1, x: 657, center: 937, frame: PLAYER2_UI_BLUE, side: "PLAYER 2  ·  ARROW KEYS" },
     ];
     const cardY = 116, cardW = 555, cardH = 536;
     for (const card of cards) {
       const character = this.characterChoices[card.player];
       const fighter = this.createFighter(character, card.player + 1, card.center);
+      const ready = this.characterReady[card.player];
       fighter.animationTime = millis() / 1000 + card.player * 0.8;
       fighter.facing = card.player === 0 ? 1 : -1;
       const isBallhog = character === "BALLHOG";
@@ -1482,6 +1590,7 @@ class Game {
       fill(card.frame[0], card.frame[1], card.frame[2], 150);
       rect(card.x + 20, cardY + 3, cardW - 40, 3, 2);
 
+      if (ready) drawGlowingButtonFill(card.x, cardY, cardW, cardH, 18, card.player === 0, card.player === 1, 58, false);
       this.drawLabel(card.side, 13, card.frame, card.center, 133, CENTER);
       this.drawLabel(character, 29, fighter.accent, card.center, 161, CENTER);
       this.drawLabel(role, 11, [202, 208, 220], card.center, 188, CENTER);
@@ -1517,51 +1626,87 @@ class Game {
         noStroke(); fill(39, 43, 57); rect(card.center - 100, stat.y + 2, 200, 7, 4);
         fill(...fighter.accent); rect(card.center - 100, stat.y + 2, 200 * stat.value, 7, 4);
       }
-      this.drawLabel(card.player === 0 ? "A / D CHANGE  ·  E CONFIRM" : "← / → CHANGE  ·  N CONFIRM", 11, CREAM, card.center, 592, CENTER);
-      const ready = this.characterReady[card.player];
-      this.drawLabel(ready ? `PLAYER ${card.player + 1} READY · PRESS ${card.player === 0 ? "E" : "N"} TO UNREADY` : `PRESS ${card.player === 0 ? "E" : "N"} TO LOCK IN`, 12, card.frame, card.center, 619, CENTER);
+      this.drawLabel(card.player === 0 ? "A / D CHANGE  ·  E CONFIRM" : "← / → CHANGE  ·  / CONFIRM", 11, CREAM, card.center, 592, CENTER);
+      this.drawLabel(ready ? `PLAYER ${card.player + 1} READY · PRESS ${card.player === 0 ? "E" : "/"} TO UNREADY` : `PRESS ${card.player === 0 ? "E" : "/"} TO LOCK IN`, 12, card.frame, card.center, 619, CENTER);
+      drawGlowingButtonOutline(card.x, cardY, cardW, cardH, 18, card.player === 0, card.player === 1);
     }
-    this.drawLabel("DOUBLE JUMP: TAP JUMP AGAIN IN AIR  ·  HOLD S / ↓ TO BLOCK + HEAL USING SUPER", 12, [231, 222, 205], WORLD_W / 2, 688, CENTER);
-    this.drawLabel("BOTH PLAYERS CONFIRM WITH E / N     ·     BACKSPACE TO MENU", 12, [177, 188, 204], WORLD_W / 2, 713, CENTER);
+    this.drawLabel("DOUBLE JUMP: TAP JUMP AGAIN IN AIR  ·  HOLD Q / . TO BLOCK (USES SUPER)", 12, [231, 222, 205], WORLD_W / 2, 688, CENTER);
+    this.drawLabel(this.pendingCharacterReturnAt ? "BOTH LOCKED · RETURNING TO MENU" : "P1: E CONFIRM  ·  P2: / CONFIRM  ·  BOTH LOCK IN TO RETURN, THEN PRESS PLAY", 12, [177, 188, 204], WORLD_W / 2, 713, CENTER);
   }
 
   drawMenuButtons() {
     const labels = ["PLAY", "PRACTICE MODE", "CHARACTER SELECT", "MAP SELECT"];
     const descriptions = ["Start a standard match", "Infinite ultimate · test moves", "Choose Ballhog or Archive", "Choose a floating platform layout"];
     const x = 58, y = 320, w = 342, h = 56, gap = 8;
+    const now = millis();
     for (let i = 0; i < labels.length; i += 1) {
       const by = y + i * (h + gap);
       const p1 = this.menuSelection[0] === i;
       const p2 = this.menuSelection[1] === i;
-      const shared = p1 && p2;
-      const active = p1 || p2;
-      noStroke(); fill(12, 13, 23, 245); rect(x, by, w, h, 10);
-      if (shared) {
-        drawingContext.save(); drawingContext.shadowBlur = 20;
-        drawingContext.shadowColor = "rgba(255,220,130,0.85)";
-        fill(255, 193, 83, 145); rect(x + 2, by + 2, w / 2 - 2, h - 4, 8);
-        drawingContext.shadowColor = "rgba(90,215,255,0.85)";
-        fill(92, 205, 244, 145); rect(x + w / 2, by + 2, w / 2 - 2, h - 4, 8);
-        drawingContext.restore();
-      } else if (p1 || p2) {
-        const tint = p1 ? GOLD : CYAN;
-        drawingContext.save(); drawingContext.shadowBlur = 22;
-        drawingContext.shadowColor = p1 ? "rgba(255,193,83,0.95)" : "rgba(112,221,222,0.95)";
-        fill(tint[0], tint[1], tint[2], 145); rect(x + 2, by + 2, w - 4, h - 4, 8);
-        drawingContext.restore();
+      const activation = this.menuActivation && this.menuActivation.index === i && now < this.menuActivation.until
+        ? this.menuActivation : null;
+
+      noStroke(); fill(12, 13, 23, 247); rect(x, by, w, h, 10);
+      stroke(86, 94, 114, 175); strokeWeight(1); noFill(); rect(x, by, w, h, 10);
+      if (activation) {
+        const fillP1 = p1 && p2 ? true : activation.players[0];
+        const fillP2 = p1 && p2 ? true : activation.players[1];
+        drawGlowingButtonFill(x, by, w, h, 10, fillP1, fillP2, 112, false);
       }
-      stroke(active ? 245 : 100, active ? 233 : 100, active ? 198 : 115);
-      strokeWeight(active ? 2 : 1); noFill(); rect(x, by, w, h, 10);
+      drawGlowingButtonOutline(x, by, w, h, 10, p1, p2);
       noStroke();
       this.drawLabel(labels[i], 15, CREAM, x + 16, by + 8);
       this.drawLabel(descriptions[i], 10, [208, 204, 200], x + 16, by + 32);
-      this.drawLabel(p1 && p2 ? "P1 + P2" : p1 ? "P1" : p2 ? "P2" : "", 9, p1 ? GOLD : CYAN, x + w - 12, by + 10, RIGHT);
+      this.drawLabel(p1 && p2 ? "P1 + P2" : p1 ? "P1" : p2 ? "P2" : "", 9,
+        p1 && p2 ? CREAM : p1 ? GOLD : PLAYER2_UI_BLUE, x + w - 12, by + 10, RIGHT);
     }
   }
 
   drawStartScreen() {
+    const now = millis();
+    if (this.pendingMenuAction && now >= this.pendingMenuAction.until) {
+      const choice = this.pendingMenuAction.index;
+      this.pendingMenuAction = null;
+      this.menuActivation = null;
+      if (choice === 2) {
+        this.menuPage = "characters";
+        this.characterReady = [false, false];
+        this.pendingCharacterReturnAt = 0;
+      } else if (choice === 3) {
+        this.menuPage = "maps";
+        this.mapSelection = [this.mapIndex, this.mapIndex];
+        this.mapReady = [false, false];
+        this.pendingMapStartAt = 0;
+      } else {
+        this.practiceMode = choice === 1;
+        this.menuPage = "main";
+        this.resetRound();
+        this.started = true;
+        return;
+      }
+    }
+    if (this.pendingCharacterReturnAt && now >= this.pendingCharacterReturnAt) {
+      this.pendingCharacterReturnAt = 0;
+      this.characterReady = [false, false];
+      this.menuSelection = [0, 0];
+      this.menuPage = "main";
+      this.resetRound();
+    }
     if (this.menuPage === "characters") { this.drawCharacterSelectScreen(); return; }
-    if (this.menuPage === "maps") { this.drawMapSelectScreen(); return; }
+    if (this.menuPage === "maps") {
+      if (this.pendingMapStartAt && now >= this.pendingMapStartAt) {
+        const selectedMap = this.mapSelection[0];
+        this.pendingMapStartAt = 0;
+        this.mapIndex = selectedMap;
+        this.mapReady = [false, false];
+        this.menuPage = "main";
+        this.resetRound();
+        this.started = true;
+        return;
+      }
+      this.drawMapSelectScreen();
+      return;
+    }
     image(backgroundLayers[this.mapIndex] || backgroundLayers[0], 0, 0);
     for (const platform of this.platforms) this.drawPlatform(platform);
     noStroke(); fill(8, 8, 17, 158); rect(0, 0, WORLD_W, WORLD_H);
@@ -1591,16 +1736,16 @@ class Game {
     this.drawLabel("PLAYER 1  ·  " + this.p1.name, 19, this.p1.accent, p1X + 18, cardY + 18);
     this.drawLabel("A / D MOVE   W DOUBLE JUMP   S + W DROP", 11, CREAM, p1X + 18, cardY + 55);
     this.drawLabel((this.p1.character === "BALLHOG" ? "HOLD E + RELEASE  ·  CHARGED ATTACK" : "E  ·  NORMAL ATTACK"), 12, [226, 215, 198], p1X + 18, cardY + 82);
-    this.drawLabel("F  ·  " + (this.p1.character === "BALLHOG" ? "BLASSIC BLAST" : "SLIMANE SPEAR"), 12, [226, 215, 198], p1X + 18, cardY + 107);
+    this.drawLabel("R  ·  " + (this.p1.character === "BALLHOG" ? "BLASSIC BLAST" : "SLIMANE SPEAR"), 12, [226, 215, 198], p1X + 18, cardY + 107);
     this.drawLabel(this.p1.character === "BALLHOG" ? "Super builds slowly; dealing hits adds more." : "Poison stacks to 4 and its ticks charge super.", 10, [177, 190, 190], p1X + 18, cardY + 142);
-    this.drawLabel("HOLD S  ·  BLOCK + HEAL USING SUPER", 10, [190, 213, 231], p1X + 18, cardY + 165);
+    this.drawLabel("HOLD Q  ·  BLOCK (USES SUPER)", 10, [190, 213, 231], p1X + 18, cardY + 165);
 
     this.drawLabel("PLAYER 2  ·  " + this.p2.name, 19, this.p2.accent, p2X + 18, cardY + 18);
     this.drawLabel("← / → MOVE   ↑ DOUBLE JUMP   ↓ + ↑ DROP", 11, CREAM, p2X + 18, cardY + 55);
-    this.drawLabel("N  ·  NORMAL ATTACK", 12, [211, 225, 222], p2X + 18, cardY + 82);
-    this.drawLabel("M  ·  " + (this.p2.character === "ARCHIVE" ? "SLIMANE SPEAR" : "BLASSIC BLAST"), 12, [211, 225, 222], p2X + 18, cardY + 107);
+    this.drawLabel("/  ·  NORMAL ATTACK", 12, [211, 225, 222], p2X + 18, cardY + 82);
+    this.drawLabel(",  ·  " + (this.p2.character === "ARCHIVE" ? "SLIMANE SPEAR" : "BLASSIC BLAST"), 12, [211, 225, 222], p2X + 18, cardY + 107);
     this.drawLabel(this.p2.character === "BALLHOG" ? "Super builds slowly; dealing hits adds more." : "Poison stacks to 4 and its ticks charge super.", 10, [177, 190, 190], p2X + 18, cardY + 142);
-    this.drawLabel("HOLD ↓  ·  BLOCK + HEAL USING SUPER", 10, [190, 213, 231], p2X + 18, cardY + 165);
+    this.drawLabel("HOLD .  ·  BLOCK (USES SUPER)", 10, [190, 213, 231], p2X + 18, cardY + 165);
 
     const orbY = 523, orbH = 128;
     noStroke(); fill(13, 14, 24, 247); rect(432, orbY, 780, orbH, 13);
@@ -1615,7 +1760,7 @@ class Game {
     this.drawLabel("CURRENT MAP  ·  " + MAP_LAYOUTS[this.mapIndex].name, 11, [189, 198, 211], 450, orbY + 88);
     this.drawLabel("PICK MAP SELECT TO CHANGE THE FLOATING PLATFORM LAYOUT", 10, [166, 178, 190], 1192, orbY + 88, RIGHT);
 
-    this.drawLabel("MENU  ·  P1: W / S + E SELECT     P2: ↑ / ↓ + N SELECT", 12, [255, 236, 196], WORLD_W / 2, 690, CENTER);
+    this.drawLabel("MENU  ·  P1: W / S + E SELECT     P2: ↑ / ↓ + / SELECT", 12, [255, 236, 196], WORLD_W / 2, 690, CENTER);
     this.drawLabel("PRACTICE MODE gives both players infinite ultimate. Hold ~ + BACKSPACE in a match to return.", 10, [178, 190, 202], WORLD_W / 2, 711, CENTER);
   }
 
@@ -1663,8 +1808,8 @@ class Game {
     strokeWeight(1);
     line(0, 721, WORLD_W, 721);
     noStroke();
-    this.drawLabel("P1  A/D MOVE  W×2 JUMP  S SHIELD  E ATTACK  F SUPER", 11, [230, 202, 158], 34, 732);
-    this.drawLabel("P2  ←/→ MOVE  ↑×2 JUMP  ↓ SHIELD  N ATTACK  M SUPER", 11, [160, 210, 207], WORLD_W - 34, 732, RIGHT);
+    this.drawLabel("P1  A/D MOVE  W×2 JUMP  Q SHIELD  E ATTACK  R SUPER", 11, [230, 202, 158], 34, 732);
+    this.drawLabel("P2  ←/→ MOVE  ↑×2 JUMP  . SHIELD  / ATTACK  , SUPER", 11, [160, 210, 207], WORLD_W - 34, 732, RIGHT);
     this.drawLabel("G FULLSCREEN · HOLD ~ + BACKSPACE TO RETURN TO MENU", 10, [194, 181, 171], WORLD_W / 2, 734, CENTER);
 
     if (this.winner) {
@@ -1688,7 +1833,7 @@ function makeBackground(mapIndex = 0) {
   const themes = [
     { top: [26, 23, 39], bottom: [63, 34, 48], floor: [25, 24, 34], edge: [187, 76, 74], grid: [47, 39, 49] },
     { top: [22, 27, 34], bottom: [83, 43, 29], floor: [30, 25, 25], edge: [231, 111, 57], grid: [62, 43, 37] },
-    { top: [14, 35, 59], bottom: [39, 86, 112], floor: [21, 34, 43], edge: [105, 208, 220], grid: [42, 63, 74] },
+    { top: [58, 151, 219], bottom: [181, 226, 247], floor: [48, 94, 118], edge: [255, 223, 139], grid: [145, 195, 212] },
     { top: [20, 18, 43], bottom: [62, 38, 83], floor: [25, 22, 39], edge: [177, 118, 239], grid: [50, 41, 72] },
   ];
   const theme = themes[mapIndex] || themes[0];
@@ -1756,29 +1901,59 @@ function makeBackground(mapIndex = 0) {
     layer.stroke(225, 116, 55, 120);
     layer.strokeWeight(2);
     for (let x = 110; x < WORLD_W; x += 220) layer.line(x, 415, x + 90, 415);
-  } else if (mapIndex === 2) {
-    // Sky Bridges: a pale moon, layered clouds, and floating distant mesas.
+} else if (mapIndex === 2) {
+    // Sky Bridges: deep open blue sky, broken cumulus, and direct sunlight.
     layer.noStroke();
-    layer.fill(151, 222, 232, 70);
-    layer.ellipse(1000, 170, 210);
-    layer.fill(178, 228, 232, 42);
-    layer.ellipse(1000, 170, 150);
-    for (let i = 0; i < 7; i += 1) {
-      const x = i * 205 - 70;
-      const y = 190 + (i * 61 % 160);
-      layer.fill(101, 157, 180, 52);
-      layer.ellipse(x + 55, y, 175, 30);
-      layer.ellipse(x + 25, y + 5, 88, 24);
-      layer.ellipse(x + 105, y + 6, 100, 23);
+    const skyContext = layer.drawingContext;
+    const sunGlow = skyContext.createRadialGradient(1010, 150, 8, 1010, 150, 275);
+    sunGlow.addColorStop(0, "rgba(255,255,239,0.92)");
+    sunGlow.addColorStop(0.12, "rgba(255,249,218,0.68)");
+    sunGlow.addColorStop(0.48, "rgba(255,237,184,0.2)");
+    sunGlow.addColorStop(1, "rgba(255,237,184,0)");
+    skyContext.fillStyle = sunGlow;
+    skyContext.beginPath();
+    skyContext.arc(1010, 150, 275, 0, Math.PI * 2);
+    skyContext.fill();
+
+    layer.fill(255, 247, 211, 150);
+    layer.ellipse(1010, 150, 128, 128);
+    layer.fill(255, 255, 246, 245);
+    layer.ellipse(1010, 150, 74, 74);
+
+    const cloudGroups = [
+      [-85, 90, 1.55], [245, 25, 0.9], [595, 260, 1.05],
+      [1050, 35, 1.18], [-55, 390, 1.15], [390, 505, 0.82],
+      [885, 425, 1.28], [1190, 285, 0.8],
+    ];
+    const puffs = [
+      [-92, 8, 116, 54], [-42, -22, 132, 76], [25, -38, 145, 94],
+      [92, -20, 130, 76], [143, 8, 116, 52], [55, 17, 270, 62],
+    ];
+    for (const [cx, cy, scale] of cloudGroups) {
+      layer.fill(115, 151, 175, 48);
+      layer.ellipse(cx + 15 * scale, cy + 20 * scale, 340 * scale, 77 * scale);
+      for (const [dx, dy, w, h] of puffs) {
+        layer.fill(146, 178, 197, 46);
+        layer.ellipse(cx + dx * scale, cy + (dy + 11) * scale, w * scale, h * scale);
+      }
+      for (const [dx, dy, w, h] of puffs) {
+        layer.fill(244, 249, 252, 178);
+        layer.ellipse(cx + dx * scale, cy + dy * scale, w * scale, h * scale);
+      }
+      layer.fill(255, 255, 255, 175);
+      layer.ellipse(cx + 22 * scale, cy - 25 * scale, 170 * scale, 48 * scale);
+      layer.ellipse(cx - 38 * scale, cy - 17 * scale, 112 * scale, 36 * scale);
     }
-    layer.fill(25, 52, 70, 135);
-    for (let i = 0; i < 8; i += 1) {
-      const x = i * 190 - 50;
-      const peak = 420 + (i * 43 % 115);
-      layer.triangle(x, 615, x + 90, peak, x + 190, 615);
-      layer.rect(x + 45, peak + 20, 90, 90);
+
+    layer.stroke(239, 249, 255, 82);
+    layer.strokeWeight(3);
+    for (let i = 0; i < 9; i += 1) {
+      const x = (i * 193 + 45) % WORLD_W;
+      const y = 190 + (i * 67 % 320);
+      layer.line(x, y, x + 60 + (i % 3) * 32, y - 5);
     }
-  } else {
+    layer.noStroke();
+    } else {
     // Spiral Steps: luminous orbit rings and scattered stars over a violet void.
     layer.noStroke();
     for (let i = 0; i < 74; i += 1) {
@@ -1799,21 +1974,12 @@ function makeBackground(mapIndex = 0) {
     layer.arc(640, 260, 430, 250, -PI * 0.75, PI * 0.75);
   }
 
-  layer.noStroke();
-  layer.fill(...theme.floor);
-  layer.rect(0, FLOOR_Y, WORLD_W, WORLD_H - FLOOR_Y);
-  layer.stroke(...theme.edge);
-  layer.strokeWeight(3);
-  layer.line(0, FLOOR_Y, WORLD_W, FLOOR_Y);
-  layer.stroke(...theme.grid);
+
+  
   layer.strokeWeight(1);
   for (let x = -300; x < WORLD_W + 300; x += 115) layer.line(WORLD_W / 2, FLOOR_Y, x, WORLD_H);
   for (const y of [675, 710, 750]) layer.line(0, y, WORLD_W, y);
-  layer.noStroke();
-  for (const x of [85, WORLD_W - 85]) {
-    layer.fill(theme.edge[0] * 0.32, theme.edge[1] * 0.32, theme.edge[2] * 0.38, 110);
-    layer.quad(x - 55, 0, x + 55, 0, x + 200, FLOOR_Y, x - 200, FLOOR_Y);
-  }
+
   return layer;
 }
 
@@ -1837,11 +2003,11 @@ const STUDY_CONTENT = {
   },
   science: {
     breadcrumb: "MY CLASSES   /   BIOLOGY 101",
-    title: "Cellular Respiration",
+    title: "susular Resuspiration",
     subtitle: "Unit 5 notes  ·  Updated today",
     lesson: "How cells convert glucose into usable energy",
     notes: [
-      "1. Glycolysis splits glucose into pyruvate in the cytoplasm.",
+      "1. Glycolysis splits glucosussy into pyruvate in the cytoplasm.",
       "2. The Krebs cycle transfers energy to electron carriers.",
       "3. The electron transport chain uses oxygen to make ATP.",
       "4. Most ATP is produced across the inner mitochondrial membrane.",
@@ -2143,7 +2309,7 @@ function drawStudyScreen() {
   rect(Math.min(300, width * 0.36), 5, Math.max(120, width * 0.54), 20, 10);
   fill(125, 134, 143);
   textSize(9);
-  text("🔒  learn.schooldesk.edu/classes/biology-101/notes", Math.min(312, width * 0.36 + 12), 15);
+  text("🔒  sussy.sus.edu/classesussy/biologusssy-101/notesussy", Math.min(312, width * 0.36 + 12), 15);
   pop();
 }
 
@@ -2351,11 +2517,16 @@ function keyPressed(event) {
 
   if (pressed === "backspace" && !game.started) {
     game.menuPage = "main";
+    game.menuActivation = null;
+    game.pendingMenuAction = null;
+    game.pendingMapStartAt = 0;
+    game.pendingCharacterReturnAt = 0;
     return false;
   }
 
   if (!game.started) {
     if (game.menuPage === "maps") {
+      if (game.pendingMapStartAt) return false;
       const adjustMap = (playerIndex, axis, step) => {
         const current = game.mapSelection[playerIndex];
         let row = Math.floor(current / 2), column = current % 2;
@@ -2372,47 +2543,59 @@ function keyPressed(event) {
       else if (pressed === "arrowright") adjustMap(1, "column", 1);
       else if (pressed === "arrowup") adjustMap(1, "row", -1);
       else if (pressed === "arrowdown") adjustMap(1, "row", 1);
-      else if ((pressed === "e" || pressed === "n") && !(event && event.repeat)) {
+      else if ((pressed === "e" || pressed === "/") && !(event && event.repeat)) {
         const playerIndex = pressed === "e" ? 0 : 1;
         game.mapReady[playerIndex] = true;
         if (game.mapReady[0] && game.mapReady[1] && game.mapSelection[0] === game.mapSelection[1]) {
-          game.mapIndex = game.mapSelection[0];
-          game.practiceMode = false; game.menuPage = "main"; game.resetRound(); game.started = true;
+          game.pendingMapStartAt = millis() + UI_FEEDBACK_MS;
         }
       }
       return false;
     }
     if (game.menuPage === "characters") {
-      if (pressed === "a" || pressed === "d") { game.characterChoices[0] = game.characterChoices[0] === "BALLHOG" ? "ARCHIVE" : "BALLHOG"; game.characterReady[0] = false; }
-      else if (pressed === "arrowleft" || pressed === "arrowright") { game.characterChoices[1] = game.characterChoices[1] === "BALLHOG" ? "ARCHIVE" : "BALLHOG"; game.characterReady[1] = false; }
-      else if ((pressed === "e" || pressed === "n") && !(event && event.repeat)) {
+      if (game.pendingCharacterReturnAt) return false;
+      if (pressed === "a" || pressed === "d") {
+        game.characterChoices[0] = game.characterChoices[0] === "BALLHOG" ? "ARCHIVE" : "BALLHOG";
+        game.characterReady[0] = false;
+      } else if (pressed === "arrowleft" || pressed === "arrowright") {
+        game.characterChoices[1] = game.characterChoices[1] === "BALLHOG" ? "ARCHIVE" : "BALLHOG";
+        game.characterReady[1] = false;
+      } else if ((pressed === "e" || pressed === "/") && !(event && event.repeat)) {
         const playerIndex = pressed === "e" ? 0 : 1;
         game.characterReady[playerIndex] = !game.characterReady[playerIndex];
         if (game.characterReady[0] && game.characterReady[1]) {
-          game.practiceMode = false; game.menuPage = "main"; game.resetRound(); game.started = true;
+          game.pendingCharacterReturnAt = millis() + UI_FEEDBACK_MS;
         }
       }
       return false;
     }
     if (pressed === "w" || pressed === "s") {
+      game.pendingMenuAction = null;
+      game.menuActivation = null;
       game.menuSelection[0] = gameClamp(game.menuSelection[0] + (pressed === "s" ? 1 : -1), 0, 3);
-      game.menuLastMover = 0; return false;
+      game.menuLastMover = 0;
+      return false;
     }
     if (pressed === "arrowup" || pressed === "arrowdown") {
+      game.pendingMenuAction = null;
+      game.menuActivation = null;
       game.menuSelection[1] = gameClamp(game.menuSelection[1] + (pressed === "arrowdown" ? 1 : -1), 0, 3);
-      game.menuLastMover = 1; return false;
+      game.menuLastMover = 1;
+      return false;
     }
-    const selectingPlayer = pressed === "e" ? 0 : pressed === "n" ? 1 : -1;
+    const selectingPlayer = pressed === "e" ? 0 : pressed === "/" ? 1 : -1;
     if (selectingPlayer >= 0) {
       if (event && event.repeat) return false;
-      const playerIndex = selectingPlayer >= 0 ? selectingPlayer : game.menuLastMover;
-      game.menuLastMover = playerIndex;
-      const choice = game.menuSelection[playerIndex];
-      if (choice === 2) { game.menuPage = "characters"; game.characterReady = [false, false]; }
-      else if (choice === 3) { game.menuPage = "maps"; game.mapSelection = [game.mapIndex, game.mapIndex]; game.mapReady = [false, false]; }
-      else {
-        game.practiceMode = choice === 1; game.menuPage = "main"; game.resetRound(); game.started = true;
+      game.menuLastMover = selectingPlayer;
+      const choice = game.menuSelection[selectingPlayer];
+      const now = millis();
+      if (game.menuActivation && game.menuActivation.index === choice && now < game.menuActivation.until) {
+        game.menuActivation.players[selectingPlayer] = true;
+      } else {
+        game.menuActivation = { index: choice, players: [false, false], until: now + UI_FEEDBACK_MS };
+        game.menuActivation.players[selectingPlayer] = true;
       }
+      game.pendingMenuAction = { index: choice, until: game.menuActivation.until };
       return false;
     }
     return false;
@@ -2424,11 +2607,11 @@ function keyPressed(event) {
   if (pressed === "w") game.requestJump(game.p1);
   else if (pressed === "arrowup") game.requestJump(game.p2);
   else if (pressed === "e") game.startAttack(game.p1);
-  else if (pressed === "n") game.startAttack(game.p2);
-  else if (pressed === "f") game.activateSuper(game.p1);
-  else if (pressed === "m") game.activateSuper(game.p2);
+  else if (pressed === "/") game.startAttack(game.p2);
+  else if (pressed === "r") game.activateSuper(game.p1);
+  else if (pressed === ",") game.activateSuper(game.p2);
 
-  if (["arrowup", "arrowdown", "arrowleft", "arrowright", " "].includes(pressed)) return false;
+  if (["arrowup", "arrowdown", "arrowleft", "arrowright", " ", "/", ".", ","].includes(pressed)) return false;
   return undefined;
 }
 
@@ -2436,14 +2619,11 @@ function keyReleased(event) {
   if (event && event.code) heldKeys.delete(event.code);
   const released = (event && event.key ? event.key : key).toLowerCase();
   if (released === "e" && game) game.releaseBallhogCharge(game.p1);
-  if (released === "n" && game) game.releaseBallhogCharge(game.p2);
-  if (["arrowup", "arrowdown", "arrowleft", "arrowright", " "].includes(released)) return false;
+  if (released === "/" && game) game.releaseBallhogCharge(game.p2);
+  if (["arrowup", "arrowdown", "arrowleft", "arrowright", " ", "/", ".", ","].includes(released)) return false;
   return undefined;
 }
 
 function windowResized() {
   resizeCanvas(windowWidth, windowHeight);
 }
-
-
-
