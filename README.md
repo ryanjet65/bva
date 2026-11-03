@@ -1,6 +1,6 @@
 # Ballhog vs Archive · Version 3.3: Beam mechanic overhual + ballhog buff!
 
-UPDATE DESCRIPTION: Over all ultimate beams (slimane spear and blassic blast) function a lot more Smoothly. Beams now have a moving hitbox so damage isnt instant. this effects its interactions with players as well as other beams (for beam clashing).
+### UPDATE DESCRIPTION: Over all ultimate beams (slimane spear and blassic blast) function a lot more Smoothly. Beams now have a moving hitbox so damage isnt instant. this effects its interactions with players as well as other beams (for beam clashing).
 A local two-player p5.js platform fighter with four arenas, animated fighters, pickups, supers, and a new double jump and guard-heal ability.
 
 ## Play
