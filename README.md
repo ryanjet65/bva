@@ -1,8 +1,7 @@
-# Ballhog vs Archive · Version 3.3: Beam mechanic overhual + ballhog buff!
+# Ballhog vs Archive · Version 3.4: ui improvements + hitboxes + blocking beams.
 
 ### UPDATE DESCRIPTION:
-Over all ultimate beams (slimane spear and blassic blast) function a lot more Smoothly. Beams now have a moving hitbox so damage isnt instant. this effects its interactions with players as well as other beams (for beam clashing).
-A local two-player p5.js platform fighter with four arenas, animated fighters, pickups, supers, and a new double jump and guard-heal ability.
+using sheild to block a beam requires at least 60% ultiamte, if the player doesnt have that than what ever remaining ultimate needs to be taken from their bar will turn into a percent of the damage taken by getting hit by the beam. hitboxes are smaller and more accurate. revamped player cards in the start screen aswell as more informational health bar+stat dsiplays in game.
 
 ### PLAY:
 # https://ryanjet65.github.io/bva/
