@@ -5,7 +5,7 @@
 const WORLD_W = 1280;
 const WORLD_H = 760;
 const FLOOR_Y = 638;
-const GAME_VERSION = "3.4";
+const GAME_VERSION = "3.4.1";
 const FPS_LIMIT = 60;
 const BALLHOG_MAX_CHARGE_SECONDS = 1.5;
 const BALLHOG_MAX_CHARGE_DAMAGE = 2.5;
@@ -1588,7 +1588,7 @@ class Game {
   drawHudName(fighter, x, y) {
     // Two text passes make a restrained glow; no per-frame shadowBlur or filters.
     textStyle(BOLD);
-    textSize(25);
+    textSize(20);
     textAlign(LEFT, TOP);
     stroke(fighter.accent[0], fighter.accent[1], fighter.accent[2], 38);
     strokeWeight(5);
@@ -1600,10 +1600,12 @@ class Game {
   }
 
   drawFighterHud(fighter, opponent, x, reverse) {
-    const w = 500;
-    const innerX = x + 16;
-    const innerW = w - 32;
-    const rightX = x + w - 16;
+    const w = 480;
+    const innerX = x + 12;
+    const innerW = w - 24;
+    const rightX = x + w - 12;
+    const statsX = x + 244;
+    const healthWidth = 216;
     const muted = [163, 173, 194];
     const healthColor = fighter.health <= 25 ? [255, 113, 123] : fighter.accent;
     const meter = gameClamp(fighter.superCharge, 0, 100);
@@ -1611,61 +1613,58 @@ class Game {
     fill(24, 27, 39);
     stroke(47, 52, 70);
     strokeWeight(1);
-    rect(x, 8, w, 142, 10);
+    rect(x, 4, w, 76, 8);
     noStroke();
     fill(fighter.accent[0], fighter.accent[1], fighter.accent[2], 130);
-    rect(innerX, 8, innerW, 2, 1);
+    rect(innerX, 4, innerW, 2, 1);
 
     const playerColor = fighter.player === 1 ? GOLD : PLAYER2_UI_BLUE;
     fill(playerColor[0], playerColor[1], playerColor[2], 25);
-    rect(innerX, 23, 30, 18, 4);
-    this.drawLabel(`P${fighter.player}`, 11, playerColor, innerX + 15, 25, CENTER);
-    this.drawHudName(fighter, x + 60, 17);
+    rect(innerX, 14, 26, 16, 4);
+    this.drawLabel(`P${fighter.player}`, 11, playerColor, innerX + 13, 15, CENTER);
+    this.drawHudName(fighter, x + 46, 10);
     const health = Math.max(0, Math.ceil(fighter.health * 10 - 1e-9) / 10);
-    this.drawLabel(`${health} / 100 HP`, 18, fighter.health <= 25 ? healthColor : CREAM, rightX, 23, RIGHT);
+    this.drawLabel(`${health} / 100 HP`, 12, fighter.health <= 25 ? healthColor : CREAM, innerX + healthWidth, 32, RIGHT);
 
-    this.drawHudMeter(innerX, 49, innerW, 18, fighter.health, healthColor, reverse, 4);
+    this.drawHudMeter(innerX, 47, healthWidth, 7, fighter.health, healthColor, reverse, 4);
 
     const abilityName = fighter.character === "BALLHOG" ? "RAF SIMONS RAGE" : "ARCHIVE OVER TIME";
-    this.drawLabel(abilityName, 11, fighter.accent, innerX, 75);
+    this.drawLabel(abilityName, 11, fighter.accent, statsX, 10);
     if (fighter.character === "ARCHIVE") {
       const poisonActive = opponent.poisonTime > 0 && opponent.poisonSourcePlayer === fighter.player;
       const remaining = poisonActive ? Math.ceil(opponent.poisonTime * 10) / 10 : 0;
-      this.drawLabel(`POISON TIMER: ${remaining.toFixed(1)}s`, 11, poisonActive ? fighter.accent : muted, rightX, 75, RIGHT);
+      this.drawLabel(`POISON TIMER: ${remaining.toFixed(1)}s`, 11, poisonActive ? fighter.accent : muted, statsX, 42);
     }
-    push();
-    translate(0, 18);
 
     if (fighter.character === "BALLHOG") {
-      this.drawLabel(`DAMAGE ×${fighter.rageMultiplier.toFixed(2)}`, 14, fighter.accent, innerX, 77);
+      this.drawLabel(`DAMAGE ×${fighter.rageMultiplier.toFixed(2)}`, 13, fighter.accent, statsX, 25);
       const bonusPercent = (fighter.rageMultiplier - 1) * 100;
-      this.drawLabel(`+${bonusPercent.toFixed(1)}%  ·  RAGE ${fighter.rageStacks}`, 12, muted, rightX, 79, RIGHT);
+      this.drawLabel(`+${bonusPercent.toFixed(1)}%  ·  RAGE ${fighter.rageStacks}`, 11, muted, statsX, 42);
     } else {
       const active = opponent.poisonTime > 0 && opponent.poisonSourcePlayer === fighter.player;
       const stacks = active ? opponent.poisonStacks : 0;
-      this.drawLabel(`POISON ON P${opponent.player}  ${stacks}/${MAX_POISON_STACKS}`, 14, fighter.accent, innerX, 77);
       for (let i = 0; i < MAX_POISON_STACKS; i += 1) {
-        fill(i < stacks ? fighter.accent : [57, 64, 80]);
-        rect(x + 249 + i * 13, 80, 9, 9, 2);
+        fill(...(i < stacks ? CYAN : [57, 64, 80]));
+        rect(rightX - 34 + i * 12, 43, 10, 10, 2);
       }
+      this.drawLabel(`POISON ON P${opponent.player}  ${stacks}/${MAX_POISON_STACKS}`, 10, fighter.accent, statsX, 27);
       const poisonDetail = stacks > 0
         ? `${opponent.poisonDps.toFixed(1)} DPS`
         : "NO ACTIVE POISON";
-      this.drawLabel(poisonDetail, 11, muted, rightX, 80, RIGHT);
+      this.drawLabel(poisonDetail, 10, muted, rightX, 27, RIGHT);
     }
 
     const superName = fighter.character === "BALLHOG" ? "BLASSIC BLAST" : "SLIMANE SPEAR";
     const superKey = fighter.player === 1 ? "R" : ",";
-    this.drawLabel(`${superName} [${superKey}]`, 11, muted, innerX, 102);
-    this.drawLabel("BLOCK 60%", 10, meter >= SHIELD_BEAM_BLOCK_COST ? fighter.accent : muted, x + 287, 103, CENTER);
-    this.drawLabel(meter >= 100 ? "READY 100%" : `${Math.floor(meter)}%`, 12, meter >= 100 ? CREAM : muted, rightX, 101, RIGHT);
-    this.drawHudMeter(innerX, 120, innerW, 7, meter, fighter.accent, reverse);
+    this.drawLabel(`${superName} [${superKey}]`, 11, muted, innerX, 58);
+    this.drawLabel("BLOCK 60%", 10, meter >= SHIELD_BEAM_BLOCK_COST ? fighter.accent : muted, x + 272, 59, CENTER);
+    this.drawLabel(meter >= 100 ? "READY 100%" : `${Math.floor(meter)}%`, 12, meter >= 100 ? CREAM : muted, rightX, 57, RIGHT);
+    this.drawHudMeter(innerX, 73, innerW, 4, meter, fighter.accent, reverse);
     const blockTick = innerX + innerW * (reverse ? 1 - SHIELD_BEAM_BLOCK_COST / 100 : SHIELD_BEAM_BLOCK_COST / 100);
     stroke(240, 235, 220, 200);
     strokeWeight(1);
-    line(blockTick, 117, blockTick, 129);
+    line(blockTick, 71, blockTick, 79);
     noStroke();
-    pop();
   }
 
   drawReturnMenuProgress(x, y, w) {
@@ -1695,24 +1694,19 @@ class Game {
 
   drawHud() {
     noStroke();
-    fill(12, 14, 23);
-    rect(0, 0, WORLD_W, 158);
-    this.drawFighterHud(this.p1, this.p2, 24, false);
-    this.drawFighterHud(this.p2, this.p1, WORLD_W - 524, true);
-    this.drawLabel("VS", 30, CREAM, WORLD_W / 2, 21, CENTER);
+    // Leave the arena visible between the cards, especially above high platforms.
+    this.drawFighterHud(this.p1, this.p2, 16, false);
+    this.drawFighterHud(this.p2, this.p1, WORLD_W - 496, true);
+    this.drawLabel("VS", 20, CREAM, WORLD_W / 2, 6, CENTER);
     const mode = this.winner ? "ROUND OVER" : this.beamClash ? "BEAM CLASH" : this.practiceMode ? "PRACTICE" : "LOCAL DUEL";
-    this.drawLabel(mode, 11, [183, 193, 215], WORLD_W / 2, 62, CENTER);
+    this.drawLabel(mode, 11, [183, 193, 215], WORLD_W / 2, 29, CENTER);
     if (this.practiceMode) {
-      this.drawLabel("UNLIMITED SUPER", 9, GOLD, WORLD_W / 2, 84, CENTER);
-      this.drawLabel("7 · RETURN TO TITLE", 9, [163, 173, 194], WORLD_W / 2, 109, CENTER);
+      this.drawLabel("UNLIMITED SUPER", 9, GOLD, WORLD_W / 2, 46, CENTER);
+      this.drawLabel("7 · RETURN TO TITLE", 9, [163, 173, 194], WORLD_W / 2, 60, CENTER);
     } else {
-      this.drawLabel("HOLD ~ + BACKSPACE", 9, [163, 173, 194], WORLD_W / 2, 99, CENTER);
-      this.drawLabel("RETURN TO MENU", 9, [163, 173, 194], WORLD_W / 2, 113, CENTER);
+      this.drawLabel("HOLD ~ + BACKSPACE", 9, [163, 173, 194], WORLD_W / 2, 46, CENTER);
+      this.drawLabel("RETURN TO MENU", 9, [163, 173, 194], WORLD_W / 2, 60, CENTER);
     }
-    stroke(49, 55, 74);
-    strokeWeight(1);
-    line(0, 157, WORLD_W, 157);
-    noStroke();
   }
 
   drawMapSelectScreen() {
