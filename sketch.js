@@ -5,18 +5,25 @@
 const WORLD_W = 1280;
 const WORLD_H = 760;
 const FLOOR_Y = 638;
-const GAME_VERSION = "3.2";
+const GAME_VERSION = "3.3";
 const FPS_LIMIT = 60;
 const BALLHOG_MAX_CHARGE_SECONDS = 1.5;
 const BALLHOG_MAX_CHARGE_DAMAGE = 2.5;
 const BALLHOG_MAX_CHARGE_UP_DAMAGE = 50;
 const BALLHOG_SWING_DURATION = 0.46;
+const BALLHOG_VERTICAL_ACTIVE_START = 0.14;
+const BALLHOG_VERTICAL_ACTIVE_END = 0.40;
 const BALLHOG_SWING_ROTATION = 125 * Math.PI / 180;
 const BALLHOG_HIT_ROTATION = 44 * Math.PI / 180;
 const BALLHOG_SWING_EXPONENT = 4;
-const BEAM_CLASH_WINDOW = 0.35;
+const BALLHOG_BEAM_SPEED = 1300;
+const ARCHIVE_BEAM_SPEED = 1600;
+const SUPER_BEAM_HEAD_LENGTH = 40;
+const SUPER_BEAM_HITBOX_LEAD = 12;
+const SUPER_BEAM_HEIGHT = 50;
 const MAX_AIR_JUMPS = 2;
 const SHIELD_SUPER_DRAIN_PER_SECOND = 42;
+const RETURN_MENU_HOLD_SECONDS = 1;
 
 const INK = [15, 14, 23];
 const CREAM = [246, 238, 220];
@@ -174,6 +181,28 @@ function overlaps(a, b) {
   return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
 }
 
+// Return the first contact time within a frame (0..1), including moving targets.
+function sweptContact(a, dx, dy, b, targetDx = 0, targetDy = 0) {
+  const relativeX = dx - targetDx;
+  const relativeY = dy - targetDy;
+  let enter = 0, leave = 1;
+  for (const [start, size, otherStart, otherSize, movement] of [
+    [a.x, a.w, b.x, b.w, relativeX],
+    [a.y, a.h, b.y, b.h, relativeY],
+  ]) {
+    if (movement === 0) {
+      if (start + size <= otherStart || start >= otherStart + otherSize) return null;
+      continue;
+    }
+    const t1 = (otherStart - start - size) / movement;
+    const t2 = (otherStart + otherSize - start) / movement;
+    enter = Math.max(enter, Math.min(t1, t2));
+    leave = Math.min(leave, Math.max(t1, t2));
+    if (enter > leave) return null;
+  }
+  return enter;
+}
+
 class Fighter {
   constructor(name, player, x, speed, damage, width, height, accent) {
     this.name = name;
@@ -205,6 +234,7 @@ class Fighter {
     this.chargingAttack = false;
     this.chargeTime = 0;
     this.attackDamageMultiplier = 1;
+    this.attackChargeRatio = 0;
     this.attackLockedFacing = false;
     this.chargedAttack = false;
     this.hitstun = 0;
@@ -245,7 +275,7 @@ class Game {
     this.started = false;
     this.practiceMode = false;
     this.elapsedTime = 0;
-    this.pendingSupers = [];
+    this.superShots = [];
     this.beamClash = null;
     this.menuPage = "main";
     this.menuSelection = [0, 0];
@@ -276,7 +306,7 @@ class Game {
     this.pickupSpawnTimer = 4;
     this.screenFlash = 0;
     this.elapsedTime = 0;
-    this.pendingSupers = [];
+    this.superShots = [];
     this.beamClash = null;
     this.returnMenuProgress = [0, 0];
     this.menuActivation = null;
@@ -337,6 +367,7 @@ class Game {
     fighter.chargingAttack = true;
     fighter.chargeTime = 0;
     fighter.attackDamageMultiplier = 1;
+    fighter.attackChargeRatio = 0;
     fighter.chargedAttack = false;
     // Cut existing momentum immediately, then cap speed while charge is held.
     fighter.vx *= 0.8;
@@ -352,7 +383,9 @@ class Game {
     this.chooseAttackDirection(fighter, this.movementKeys(fighter));
     fighter.attackTime = 0;
     fighter.attackResolved = false;
-    const chargeRatio = chargeTime / BALLHOG_MAX_CHARGE_SECONDS;
+    const chargeRatio = chargeTime >= BALLHOG_MAX_CHARGE_SECONDS - 1e-6
+      ? 1 : chargeTime / BALLHOG_MAX_CHARGE_SECONDS;
+    fighter.attackChargeRatio = chargeRatio;
     const maxAttackMultiplier = fighter.attackUp
       ? BALLHOG_MAX_CHARGE_UP_DAMAGE / fighter.damage
       : BALLHOG_MAX_CHARGE_DAMAGE;
@@ -363,29 +396,60 @@ class Game {
   }
 
   activateSuper(fighter) {
+    if (this.beamClash) { this.clashPress(fighter); return; }
     if (this.winner || fighter.shielding || fighter.chargingAttack || fighter.superCharge < 100 || fighter.superTime > 0 || fighter.hitstun > 0) return;
     fighter.superCharge = 0;
     fighter.superTime = 0.62;
     fighter.superResolved = false;
     this.addBurst(fighter.x, fighter.chestY, fighter.accent, 18, 300);
-    this.registerSuperShot(fighter);
   }
 
-  beamsAreAligned(a, b) {
-    const left = a.x < b.x ? a : b;
-    const right = left === a ? b : a;
-    return left.facing > 0 && right.facing < 0 && left.x < right.x && Math.abs(a.chestY - b.chestY) <= 50;
+  launchSuper(fighter) {
+    // The beam stays attached to its caster; direction and damage lock on release.
+    const shot = {
+      fighter,
+      direction: fighter.facing,
+      speed: fighter.character === "BALLHOG" ? BALLHOG_BEAM_SPEED : ARCHIVE_BEAM_SPEED,
+      damage: (fighter.character === "BALLHOG" ? 53 * fighter.rageMultiplier : 35),
+    };
+    Object.assign(shot, this.superShotGeometry(shot, SUPER_BEAM_HEAD_LENGTH));
+    this.superShots.push(shot);
   }
 
-  registerSuperShot(fighter) {
-    const match = this.pendingSupers.find((shot) => shot.fighter !== fighter && this.elapsedTime - shot.time <= BEAM_CLASH_WINDOW && this.beamsAreAligned(shot.fighter, fighter));
-    if (!match) { this.pendingSupers.push({ fighter, time: this.elapsedTime }); return; }
-    this.pendingSupers = this.pendingSupers.filter((shot) => shot !== match);
-    this.beamClash = { leftStake: 5, secondsLeft: 5, lastPlayer: fighter.player, pulse: 0 };
-    this.p1.superTime = 0; this.p2.superTime = 0;
-    this.p1.superResolved = true; this.p2.superResolved = true;
-    this.addBurst((this.p1.x + this.p2.x) / 2, (this.p1.chestY + this.p2.chestY) / 2, [255, 244, 208], 14, 240);
-    this.addText("BEAM CLASH! SPAM E / N!", WORLD_W / 2, 260, [255, 245, 216]);
+  superShotGeometry(shot, distance) {
+    const originX = shot.fighter.x;
+    const originY = shot.fighter.chestY + 2;
+    const tipX = originX + shot.direction * distance;
+    return {
+      originX, originY, tipX, distance,
+      // Only the leading edge collides. A small forward cushion helps near misses.
+      x: tipX - (shot.direction > 0 ? SUPER_BEAM_HEAD_LENGTH : SUPER_BEAM_HITBOX_LEAD),
+      y: originY - SUPER_BEAM_HEIGHT / 2,
+      w: SUPER_BEAM_HEAD_LENGTH + SUPER_BEAM_HITBOX_LEAD,
+      h: SUPER_BEAM_HEIGHT,
+    };
+  }
+
+  startBeamClash(x, y, lastPlayer) {
+    this.superShots = [];
+    this.beamClash = { leftStake: 5, secondsLeft: 5, lastPlayer, pulse: 0, x, y };
+    for (const fighter of [this.p1, this.p2]) {
+      fighter.superTime = 0;
+      fighter.superResolved = true;
+      fighter.vx = 0;
+      fighter.vy = 0;
+      fighter.chargingAttack = false;
+      fighter.chargeTime = 0;
+      fighter.attackTime = -1;
+      fighter.attackLockedFacing = false;
+      fighter.chargedAttack = false;
+      fighter.attackChargeRatio = 0;
+      fighter.attackDamageMultiplier = 1;
+      fighter.jumpBuffer = 0;
+      fighter.shielding = false;
+    }
+    this.addBurst(x, y, [255, 244, 208], 14, 240);
+    this.addText("BEAM CLASH! TAP OR HOLD ATTACK / SUPER!", WORLD_W / 2, 260, [255, 245, 216]);
   }
 
   clashPress(fighter) {
@@ -400,7 +464,7 @@ class Game {
 
   finishBeamClash(winner) {
     if (!this.beamClash) return;
-    this.beamClash = null; this.pendingSupers = [];
+    this.beamClash = null; this.superShots = [];
     const target = winner.player === 1 ? this.p2 : this.p1;
     target.health = Math.max(0, target.health - 45); target.vx = winner.facing * 390; target.vy = -390;
     target.grounded = false; target.hitstun = 0.75; target.flash = 0.3;
@@ -419,14 +483,50 @@ class Game {
     }
   }
 
-  updatePendingSupers() {
-    for (let i = this.pendingSupers.length - 1; i >= 0; i -= 1) {
-      const shot = this.pendingSupers[i];
-      if (this.elapsedTime - shot.time >= BEAM_CLASH_WINDOW) {
-        this.resolveSuper(shot.fighter, shot.fighter.player === 1 ? this.p2 : this.p1);
-        this.pendingSupers.splice(i, 1);
+  updateSuperShots(dt, fighterStarts = [this.p1.rect, this.p2.rect]) {
+    if (this.winner || this.beamClash) { this.superShots = []; return; }
+    const paths = this.superShots.map((shot) => {
+      const next = this.superShotGeometry(shot, shot.distance + shot.speed * dt);
+      return { shot, start: { ...shot }, next, dx: next.x - shot.x, dy: next.y - shot.y };
+    });
+    const contacts = [];
+    for (let i = 0; i < paths.length; i += 1) {
+      const path = paths[i];
+      const target = path.shot.fighter.player === 1 ? this.p2 : this.p1;
+      const targetStart = fighterStarts[target.player - 1];
+      const targetEnd = target.rect;
+      const hitTime = sweptContact(path.start, path.dx, path.dy, targetStart,
+        targetEnd.x - targetStart.x, targetEnd.y - targetStart.y);
+      if (hitTime !== null) contacts.push({ time: hitTime, path, target });
+      for (let j = i + 1; j < paths.length; j += 1) {
+        const other = paths[j];
+        if (path.shot.fighter.player === other.shot.fighter.player) continue;
+        const clashTime = sweptContact(path.start, path.dx, path.dy, other.start, other.dx, other.dy);
+        if (clashTime !== null) contacts.push({ time: clashTime, path, other });
       }
     }
+    // Resolve the first collision in travel order. A clash wins an exact tie.
+    contacts.sort((a, b) => a.time - b.time || Number(!!b.other) - Number(!!a.other));
+    const consumed = new Set();
+    for (const contact of contacts) {
+      if (consumed.has(contact.path.shot) || (contact.other && consumed.has(contact.other.shot))) continue;
+      if (contact.other) {
+        const a = contact.path, b = contact.other;
+        const ax = a.start.x + a.dx * contact.time;
+        const bx = b.start.x + b.dx * contact.time;
+        const ay = a.start.y + a.dy * contact.time;
+        const by = b.start.y + b.dy * contact.time;
+        const x = (Math.max(ax, bx) + Math.min(ax + a.shot.w, bx + b.shot.w)) / 2;
+        const y = (Math.max(ay, by) + Math.min(ay + a.shot.h, by + b.shot.h)) / 2;
+        this.startBeamClash(x, y, b.shot.fighter.player);
+        return;
+      }
+      consumed.add(contact.path.shot);
+      this.resolveSuper(contact.path.shot, contact.target);
+      if (this.winner) { this.superShots = []; return; }
+    }
+    for (const path of paths) Object.assign(path.shot, path.next);
+    this.superShots = this.superShots.filter((shot) => !consumed.has(shot) && shot.x < WORLD_W && shot.x + shot.w > 0);
   }
 
   addBurst(x, y, color, count = 12, force = 230) {
@@ -540,7 +640,6 @@ class Game {
       // Ballhog still gets a small super bonus for taking hits, but this gain
       // is deliberately much lower so his passive meter does not race ahead.
       if (target.character === "BALLHOG") target.superCharge = Math.min(100, target.superCharge + amount * 0.10 + 1.5);
-      if (attacker.character === "BALLHOG") attacker.superCharge = Math.min(100, attacker.superCharge + amount * 0.35);
       this.addBurst(target.x, target.chestY, [255, 231, 197], 13, 260);
     }
     this.addText(message || `-${amount.toFixed(1)}`, target.x, target.chestY - 16, dot ? CYAN : [255, 214, 160]);
@@ -557,7 +656,7 @@ class Game {
       // Keep the overhead strike centered on the fighter and extend it well
       // above the head, with enough lower overlap to catch a close platform gap.
       const upReach = 190;
-      const downOverlap = 60;
+      const downOverlap = attacker.character === "BALLHOG" ? attacker.h : 60;
       const upWidth = attacker.w + 110;
       hitbox = {
         x: attacker.x - upWidth / 2,
@@ -568,11 +667,12 @@ class Game {
     } else if (attacker.attackDown) {
       const downReach = 145;
       const downWidth = attacker.w + 110;
+      const upperOverlap = attacker.character === "BALLHOG" ? attacker.h * 0.60 : 8;
       hitbox = {
         x: attacker.x - downWidth / 2,
-        y: attacker.bottom - 8,
+        y: attacker.bottom - upperOverlap,
         w: downWidth,
-        h: downReach,
+        h: downReach + upperOverlap - 8,
       };
     } else {
       const reach = attacker.character === "BALLHOG" ? 93 : 102;
@@ -588,6 +688,14 @@ class Game {
       amount = Math.min(BALLHOG_MAX_CHARGE_UP_DAMAGE, amount);
     }
     const landed = this.takeHit(target, attacker, amount, attacker.attackUp || attacker.attackDown ? 0 : attacker.facing);
+    if (landed && attacker.character === "BALLHOG") {
+      // Keep light charges close to a tap; most meter is earned near full charge.
+      const chargeRatio = gameClamp(attacker.attackChargeRatio, 0, 1);
+      const chargeCurve = Math.expm1(3 * chargeRatio) / Math.expm1(3);
+      const superGain = Math.round(10 + 25 * chargeCurve);
+      attacker.superCharge = Math.min(100, attacker.superCharge + superGain);
+      this.addText(`+${superGain} SUPER`, attacker.x, attacker.bottom - attacker.h - 32, GOLD);
+    }
     if (landed && attacker.character === "ARCHIVE") {
       // Archive charges ultimate from confirmed normal hits and poison ticks.
       attacker.superCharge = Math.min(100, attacker.superCharge + amount * 0.5);
@@ -596,14 +704,11 @@ class Game {
     return true;
   }
 
-  resolveSuper(attacker, target) {
-    const beamY = attacker.chestY + 2;
-    const beamStart = Math.min(attacker.x, attacker.facing > 0 ? WORLD_W : 0);
-    const beamEnd = Math.max(attacker.x, attacker.facing > 0 ? WORLD_W : 0);
-    const beam = { x: beamStart, y: beamY - 25, w: Math.max(1, beamEnd - beamStart), h: 50 };
-    if (!overlaps(beam, target.rect)) return;
-    const amount = (attacker.character === "BALLHOG" ? 43 : 35) * (attacker.character === "BALLHOG" ? attacker.rageMultiplier : 1);
-    const landed = this.takeHit(target, attacker, amount, attacker.facing, attacker.character === "BALLHOG" ? "BLASSIC!" : "SPEARED!");
+  resolveSuper(shot, target) {
+    const attacker = shot.fighter;
+    const amount = shot.damage;
+    const landed = this.takeHit(target, attacker, amount, shot.direction, attacker.character === "BALLHOG" ? "BLASSIC!" : "SPEARED!");
+    if (landed && attacker.character === "BALLHOG") attacker.superCharge = Math.min(100, attacker.superCharge + amount * 0.35);
     if (landed && attacker.character === "ARCHIVE") this.applyPoison(target, attacker);
   }
 
@@ -643,6 +748,9 @@ class Game {
 
     if (fighter.chargingAttack) {
       fighter.chargeTime = Math.min(BALLHOG_MAX_CHARGE_SECONDS, fighter.chargeTime + dt);
+      if (fighter.chargeTime >= BALLHOG_MAX_CHARGE_SECONDS - 1e-6) {
+        fighter.chargeTime = BALLHOG_MAX_CHARGE_SECONDS;
+      }
     }
 
     if (fighter.poisonTime > 0) {
@@ -670,26 +778,31 @@ class Game {
     this.moveFighter(fighter, opponent, dt);
 
     if (fighter.attackTime >= 0) {
+      const previousAttackTime = fighter.attackTime;
       fighter.attackTime += dt;
       // Ballhog's straight punch activates when the fist rotates 45 degrees into its eased arc.
       const ballhogStraightPunch = fighter.character === "BALLHOG" && fighter.chargedAttack && !fighter.attackUp && !fighter.attackDown;
-      const activeStart = fighter.character === "BALLHOG" ? 0.45 : 0.07;
-      const activeEnd = fighter.character === "BALLHOG" ? BALLHOG_SWING_DURATION : 0.17;
+      const ballhogVertical = fighter.character === "BALLHOG" && (fighter.attackUp || fighter.attackDown);
+      const activeStart = ballhogVertical ? BALLHOG_VERTICAL_ACTIVE_START : fighter.character === "BALLHOG" ? 0.45 : 0.07;
+      const activeEnd = ballhogVertical ? BALLHOG_VERTICAL_ACTIVE_END : fighter.character === "BALLHOG" ? BALLHOG_SWING_DURATION : 0.17;
       const swingProgress = gameClamp(fighter.attackTime / BALLHOG_SWING_DURATION, 0, 1);
       const easedProgress = exponentialSwingProgress(swingProgress);
       const fistReachedHitAngle = easedProgress * BALLHOG_SWING_ROTATION >= BALLHOG_HIT_ROTATION;
       const attackIsActive = ballhogStraightPunch
         ? fistReachedHitAngle
-        : fighter.attackTime >= activeStart && fighter.attackTime <= activeEnd;
+        // Include frames that cross the hit window, even when they end past it.
+        : fighter.attackTime >= activeStart && previousAttackTime <= activeEnd;
       if (attackIsActive && !fighter.attackResolved) {
         const connected = this.resolveAttack(fighter, opponent);
-        if (!ballhogStraightPunch || connected) fighter.attackResolved = true;
+        // Ballhog keeps checking through the swing until contact, once per target.
+        if ((!ballhogStraightPunch && !ballhogVertical) || connected) fighter.attackResolved = true;
       }
       if (fighter.attackTime > (fighter.character === "BALLHOG" ? BALLHOG_SWING_DURATION : 0.27)) {
         fighter.attackTime = -1;
         fighter.attackLockedFacing = false;
         fighter.chargedAttack = false;
         fighter.attackDamageMultiplier = 1;
+        fighter.attackChargeRatio = 0;
       }
     }
 
@@ -697,8 +810,8 @@ class Game {
       const oldTime = fighter.superTime;
       fighter.superTime = Math.max(0, fighter.superTime - dt);
       if (oldTime > 0.34 && fighter.superTime <= 0.34 && !fighter.superResolved) {
-        // Keep the shot pending through the full 0.75s clash window.
         fighter.superResolved = true;
+        this.launchSuper(fighter);
         this.addBurst(fighter.x + fighter.facing * 90, fighter.chestY, fighter.character === "BALLHOG" ? GOLD : [86, 174, 255], 28, 420);
       }
     }
@@ -707,22 +820,24 @@ class Game {
   update(dt) {
     dt = Math.min(dt, 1 / 30);
     this.elapsedTime += dt;
-    if (!this.winner) {
+    if (!this.winner && this.beamClash) {
+      this.updateBeamClash(dt);
+    } else if (!this.winner) {
+      const fighterStarts = [this.p1.rect, this.p2.rect];
       this.updateFighter(this.p1, this.p2, dt);
-      this.updateFighter(this.p2, this.p1, dt);
-      this.updatePickups(dt);
+      if (!this.winner) this.updateFighter(this.p2, this.p1, dt);
+      this.updateSuperShots(dt, fighterStarts);
+      if (!this.winner && !this.beamClash) this.updatePickups(dt);
     }
-    this.updatePendingSupers();
-    this.updateBeamClash(dt);
     const leftShiftHeld = returnMenuKeyHeld[0];
     const rightShiftHeld = returnMenuKeyHeld[1];
     this.returnMenuProgress[0] = leftShiftHeld
-      ? Math.min(1, this.returnMenuProgress[0] + dt / 1.5)
+      ? Math.min(1, this.returnMenuProgress[0] + dt / RETURN_MENU_HOLD_SECONDS)
       : Math.max(0, this.returnMenuProgress[0] - dt / 0.2);
     this.returnMenuProgress[1] = rightShiftHeld
-      ? Math.min(1, this.returnMenuProgress[1] + dt / 1.5)
+      ? Math.min(1, this.returnMenuProgress[1] + dt / RETURN_MENU_HOLD_SECONDS)
       : Math.max(0, this.returnMenuProgress[1] - dt / 0.2);
-    if (this.returnMenuProgress[0] >= 1 && this.returnMenuProgress[1] >= 1) {
+    if (this.returnMenuProgress[0] >= 1 - 1e-6 && this.returnMenuProgress[1] >= 1 - 1e-6) {
       this.practiceMode = false;
       this.resetRound();
       this.started = false;
@@ -972,7 +1087,7 @@ class Game {
       textAlign(CENTER, CENTER);
       textSize(8);
       textStyle(BOLD);
-      text("CHARGE", bodyX, foot + 31);
+      text(chargeRatio === 1 ? "FULL CHARGE" : "CHARGE", bodyX, foot + 31);
       stroke(255, 238, 192, 130 + pulse * 80);
       strokeWeight(2);
       line(fistX - 18, fistY + 14, fistX - 24 - chargeRatio * 8, fistY + 26);
@@ -1150,8 +1265,10 @@ class Game {
     if (!clash) return;
 
     const clashRatio = clash.leftStake / 10;
-    const cx = this.p1.x + (this.p2.x - this.p1.x) * clashRatio;
-    const cy = this.p1.chestY + (this.p2.chestY - this.p1.chestY) * clashRatio;
+    const pushedToward = clashRatio >= 0.5 ? this.p2 : this.p1;
+    const pushProgress = Math.abs(clashRatio - 0.5) * 2;
+    const cx = clash.x + (pushedToward.x - clash.x) * pushProgress;
+    const cy = clash.y + (pushedToward.chestY - clash.y) * pushProgress;
     const time = millis() / 1000;
     const pulse = 0.5 + 0.5 * Math.sin(time * 9);
 
@@ -1232,8 +1349,8 @@ class Game {
     noFill();
     rect(x - 20, y - 34, w + 40, 72, 13);
     noStroke();
-    this.drawLabel("BALLHOG  ·  MASH E", 13, this.p1.accent, x, y - 21);
-    this.drawLabel("ARCHIVE  ·  MASH N", 13, this.p2.accent, x + w, y - 21, RIGHT);
+    this.drawLabel("P1  ·  TAP / HOLD E OR R", 13, this.p1.accent, x, y - 21);
+    this.drawLabel("P2  ·  TAP / HOLD / OR ,", 13, this.p2.accent, x + w, y - 21, RIGHT);
     const timerW = 90;
     fill(24, 25, 37);
     stroke(255, 245, 220, 130);
@@ -1270,14 +1387,12 @@ class Game {
   }
 
   drawSuperEffect(fighter) {
-    if (fighter.superTime <= 0) return;
+    if (fighter.superTime <= 0 || fighter.superResolved) return;
 
     const y = fighter.chestY + 2;
-    const edge = fighter.facing > 0 ? WORLD_W : 0;
     const t = millis() / 1000;
-    const charging = fighter.superTime > 0.36;
 
-    if (charging) {
+    {
       // Rotating charge rings and sparks make the super's wind-up readable.
       noFill();
       strokeWeight(3);
@@ -1309,11 +1424,18 @@ class Game {
         this.drawLabel("SLIMANE SPEAR", 14, [183, 224, 255], fighter.x, y - 78, CENTER);
       }
       noStroke();
-      return;
     }
+  }
 
-    const progress = gameClamp(1 - fighter.superTime / 0.34, 0, 1);
-    const tipX = fighter.x + (edge - fighter.x) * progress;
+  drawSuperShot(shot) {
+    // Draw the whole growing beam, from the caster to its moving leading edge.
+    const tailX = shot.originX;
+    const tipX = shot.tipX;
+    const fighter = { character: shot.fighter.character, x: tailX, facing: shot.direction };
+    const edge = tipX;
+    const y = shot.originY;
+    const t = millis() / 1000;
+    strokeCap(SQUARE);
 
     if (fighter.character === "BALLHOG") {
       // A layered gold-white laser with lively lightning filaments and traveling flares.
@@ -1356,10 +1478,10 @@ class Game {
       }
 
       fill(255, 253, 225);
-      ellipse(fighter.x, y, 72 + Math.sin(t * 28) * 10);
-      this.drawLabel("BLASSIC BLAST", 16, [255, 241, 193], fighter.x + fighter.facing * 170, y - 47, CENTER);
+      ellipse(tipX - shot.direction * 24, y, 40, 48);
+      this.drawLabel("BLASSIC BLAST", 16, [255, 241, 193], (tailX + tipX) / 2, y - 47, CENTER);
     } else {
-      // The Slimane Spear races across the arena, leaving a blue-white wake.
+      // The Slimane Spear grows outward with a continuous blue-white beam.
       stroke(184, 224, 255, 110);
       strokeWeight(36);
       line(fighter.x, y, tipX, y);
@@ -1389,8 +1511,8 @@ class Game {
       noFill();
       stroke(255, 137, 154, 210);
       strokeWeight(3);
-      ellipse(fighter.x, y, 50 + Math.sin(t * 24) * 8);
-      this.drawLabel("SLIMANE SPEAR", 16, [255, 206, 211], fighter.x + fighter.facing * 158, y - 43, CENTER);
+      ellipse(tailX + shot.direction * 24, y, 34, 46);
+      this.drawLabel("SLIMANE SPEAR", 16, [255, 206, 211], (tailX + tipX) / 2, y - 43, CENTER);
     }
     noStroke();
   }
@@ -1737,14 +1859,14 @@ class Game {
     this.drawLabel("A / D MOVE   W DOUBLE JUMP   S + W DROP", 11, CREAM, p1X + 18, cardY + 55);
     this.drawLabel((this.p1.character === "BALLHOG" ? "HOLD E + RELEASE  ·  CHARGED ATTACK" : "E  ·  NORMAL ATTACK"), 12, [226, 215, 198], p1X + 18, cardY + 82);
     this.drawLabel("R  ·  " + (this.p1.character === "BALLHOG" ? "BLASSIC BLAST" : "SLIMANE SPEAR"), 12, [226, 215, 198], p1X + 18, cardY + 107);
-    this.drawLabel(this.p1.character === "BALLHOG" ? "Super builds slowly; dealing hits adds more." : "Poison stacks to 4 and its ticks charge super.", 10, [177, 190, 190], p1X + 18, cardY + 142);
+    this.drawLabel(this.p1.character === "BALLHOG" ? "Full-charge hits grant 35% super; light charges give less." : "Poison stacks to 4 and its ticks charge super.", 10, [177, 190, 190], p1X + 18, cardY + 142);
     this.drawLabel("HOLD Q  ·  BLOCK (USES SUPER)", 10, [190, 213, 231], p1X + 18, cardY + 165);
 
     this.drawLabel("PLAYER 2  ·  " + this.p2.name, 19, this.p2.accent, p2X + 18, cardY + 18);
     this.drawLabel("← / → MOVE   ↑ DOUBLE JUMP   ↓ + ↑ DROP", 11, CREAM, p2X + 18, cardY + 55);
     this.drawLabel("/  ·  NORMAL ATTACK", 12, [211, 225, 222], p2X + 18, cardY + 82);
     this.drawLabel(",  ·  " + (this.p2.character === "ARCHIVE" ? "SLIMANE SPEAR" : "BLASSIC BLAST"), 12, [211, 225, 222], p2X + 18, cardY + 107);
-    this.drawLabel(this.p2.character === "BALLHOG" ? "Super builds slowly; dealing hits adds more." : "Poison stacks to 4 and its ticks charge super.", 10, [177, 190, 190], p2X + 18, cardY + 142);
+    this.drawLabel(this.p2.character === "BALLHOG" ? "Full-charge hits grant 35% super; light charges give less." : "Poison stacks to 4 and its ticks charge super.", 10, [177, 190, 190], p2X + 18, cardY + 142);
     this.drawLabel("HOLD .  ·  BLOCK (USES SUPER)", 10, [190, 213, 231], p2X + 18, cardY + 165);
 
     const orbY = 523, orbH = 128;
@@ -1785,6 +1907,7 @@ class Game {
     for (const pickup of this.pickups) this.drawPickup(pickup);
     this.drawSuperEffect(this.p1);
     this.drawSuperEffect(this.p2);
+    for (const shot of this.superShots) this.drawSuperShot(shot);
     this.drawFighter(this.p1);
     this.drawFighter(this.p2);
     if (this.beamClash) this.drawBeamClash();
