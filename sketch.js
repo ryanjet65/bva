@@ -5,7 +5,7 @@
 const WORLD_W = 1280;
 const WORLD_H = 760;
 const FLOOR_Y = 638;
-const GAME_VERSION = "3.3";
+const GAME_VERSION = "3.4";
 const FPS_LIMIT = 60;
 const BALLHOG_MAX_CHARGE_SECONDS = 1.5;
 const BALLHOG_MAX_CHARGE_DAMAGE = 2.5;
@@ -13,6 +13,10 @@ const BALLHOG_MAX_CHARGE_UP_DAMAGE = 50;
 const BALLHOG_SWING_DURATION = 0.46;
 const BALLHOG_VERTICAL_ACTIVE_START = 0.14;
 const BALLHOG_VERTICAL_ACTIVE_END = 0.40;
+const VERTICAL_ATTACK_VFX_WIDTH = 110;
+const VERTICAL_ATTACK_VFX_HEIGHT = 116;
+const VERTICAL_DOWN_ATTACK_WIDTH = 54;
+const VERTICAL_DOWN_ATTACK_REACH = 57;
 const BALLHOG_SWING_ROTATION = 125 * Math.PI / 180;
 const BALLHOG_HIT_ROTATION = 44 * Math.PI / 180;
 const BALLHOG_SWING_EXPONENT = 4;
@@ -23,14 +27,16 @@ const SUPER_BEAM_HITBOX_LEAD = 12;
 const SUPER_BEAM_HEIGHT = 50;
 const MAX_AIR_JUMPS = 2;
 const SHIELD_SUPER_DRAIN_PER_SECOND = 42;
+const SHIELD_BEAM_BLOCK_COST = 60;
 const RETURN_MENU_HOLD_SECONDS = 1;
+const MAX_POISON_STACKS = 3;
 
 const INK = [15, 14, 23];
 const CREAM = [246, 238, 220];
 const GOLD = [255, 193, 83];
 const CYAN = [112, 221, 222];
 
-const PLAYER2_UI_BLUE = [80, 158, 255];
+const PLAYER2_UI_BLUE = CYAN;
 const UI_FEEDBACK_MS = 230;
 
 function drawGlowingButtonOutline(x, y, w, h, radius, playerOne, playerTwo) {
@@ -39,14 +45,14 @@ function drawGlowingButtonOutline(x, y, w, h, radius, playerOne, playerTwo) {
     const ctx = drawingContext;
     ctx.save();
     ctx.shadowBlur = 16;
-    ctx.shadowColor = "rgba(178,190,255,0.8)";
+    ctx.shadowColor = `rgba(${PLAYER2_UI_BLUE.join(",")},0.8)`;
     ctx.lineWidth = 3;
     ctx.lineJoin = "round";
     const gradient = ctx.createLinearGradient(x, y, x + w, y);
     gradient.addColorStop(0, "rgb(255,193,83)");
     gradient.addColorStop(0.42, "rgb(255,193,83)");
-    gradient.addColorStop(0.58, "rgb(80,158,255)");
-    gradient.addColorStop(1, "rgb(80,158,255)");
+    gradient.addColorStop(0.58, `rgb(${PLAYER2_UI_BLUE.join(",")})`);
+    gradient.addColorStop(1, `rgb(${PLAYER2_UI_BLUE.join(",")})`);
     ctx.strokeStyle = gradient;
     ctx.beginPath();
     if (ctx.roundRect) ctx.roundRect(x, y, w, h, radius);
@@ -94,12 +100,12 @@ function drawGlowingButtonFill(x, y, w, h, radius, playerOne, playerTwo, alpha =
     const ctx = drawingContext;
     ctx.save();
     ctx.shadowBlur = 18;
-    ctx.shadowColor = "rgba(178,190,255,0.78)";
+    ctx.shadowColor = `rgba(${PLAYER2_UI_BLUE.join(",")},0.78)`;
     const gradient = ctx.createLinearGradient(x, y, x + w, y);
     gradient.addColorStop(0, "rgba(255,193,83," + (alpha / 255) + ")");
     gradient.addColorStop(0.42, "rgba(255,193,83," + (alpha / 255) + ")");
-    gradient.addColorStop(0.58, "rgba(80,158,255," + (alpha / 255) + ")");
-    gradient.addColorStop(1, "rgba(80,158,255," + (alpha / 255) + ")");
+    gradient.addColorStop(0.58, `rgba(${PLAYER2_UI_BLUE.join(",")},${alpha / 255})`);
+    gradient.addColorStop(1, `rgba(${PLAYER2_UI_BLUE.join(",")},${alpha / 255})`);
     ctx.fillStyle = gradient;
     ctx.beginPath();
     if (ctx.roundRect) ctx.roundRect(x + 2, y + 2, w - 4, h - 4, Math.max(3, radius - 2));
@@ -650,30 +656,41 @@ class Game {
     return true;
   }
 
+  fighterBodyGeometry(f, visualX = f.x, preview = false) {
+    const walking = preview ? 0 : (f.grounded ? Math.min(1, Math.abs(f.vx) / Math.max(1, f.speed)) : 0);
+    const airborne = !preview && !f.grounded ? 1 : 0;
+    const duration = f.character === "BALLHOG" ? BALLHOG_SWING_DURATION : 0.27;
+    const attackPose = !preview && f.attackTime >= 0 && f.attackTime < duration
+      ? Math.sin(gameClamp(f.attackTime / duration, 0, 1) * Math.PI) : 0;
+    const breathing = Math.sin(f.animationTime * 3.1) * 1.8 * (preview ? 1 : 1 - walking);
+    const hitLean = !preview && f.hitstun > 0 ? -Math.sign(f.vx || f.facing) * 5 : 0;
+    const bodyBob = breathing + Math.sin(f.walkPhase * 2) * 2.2 * walking - airborne * 3;
+    return {
+      bodyX: Math.round(visualX) + f.facing * attackPose * 5 + hitLean,
+      bodyTop: Math.round(f.bottom) - f.h + 34 + bodyBob,
+      bodyBottom: Math.round(f.bottom) - (f.character === "BALLHOG" ? 40 : 48) + bodyBob,
+      bodyBob,
+    };
+  }
+
+  verticalAttackHitbox(fighter) {
+    const { bodyX, bodyTop, bodyBob } = this.fighterBodyGeometry(fighter);
+    if (fighter.attackDown && !fighter.attackUp) {
+      // Downward hits belong under the feet, never beside the torso or legs.
+      const top = fighter.bottom + 4;
+      const bottom = Math.round(fighter.bottom) + VERTICAL_DOWN_ATTACK_REACH + bodyBob;
+      return { x: fighter.x - VERTICAL_DOWN_ATTACK_WIDTH / 2, y: top, w: VERTICAL_DOWN_ATTACK_WIDTH, h: Math.max(0, bottom - top) };
+    }
+    // Cover the bright arc and streaks, staying inside the surrounding glow.
+    const top = bodyTop - 48 - VERTICAL_ATTACK_VFX_HEIGHT / 2 - 2;
+    const bottom = bodyTop - 10;
+    return { x: bodyX - VERTICAL_ATTACK_VFX_WIDTH / 2, y: top, w: VERTICAL_ATTACK_VFX_WIDTH, h: bottom - top };
+  }
+
   resolveAttack(attacker, target) {
     let hitbox;
-    if (attacker.attackUp) {
-      // Keep the overhead strike centered on the fighter and extend it well
-      // above the head, with enough lower overlap to catch a close platform gap.
-      const upReach = 190;
-      const downOverlap = attacker.character === "BALLHOG" ? attacker.h : 60;
-      const upWidth = attacker.w + 110;
-      hitbox = {
-        x: attacker.x - upWidth / 2,
-        y: attacker.bottom - attacker.h - upReach,
-        w: upWidth,
-        h: upReach + downOverlap,
-      };
-    } else if (attacker.attackDown) {
-      const downReach = 145;
-      const downWidth = attacker.w + 110;
-      const upperOverlap = attacker.character === "BALLHOG" ? attacker.h * 0.60 : 8;
-      hitbox = {
-        x: attacker.x - downWidth / 2,
-        y: attacker.bottom - upperOverlap,
-        w: downWidth,
-        h: downReach + upperOverlap - 8,
-      };
+    if (attacker.attackUp || attacker.attackDown) {
+      hitbox = this.verticalAttackHitbox(attacker);
     } else {
       const reach = attacker.character === "BALLHOG" ? 93 : 102;
       const hitWidth = attacker.character === "BALLHOG" ? 84 : 98;
@@ -706,15 +723,37 @@ class Game {
 
   resolveSuper(shot, target) {
     const attacker = shot.fighter;
-    const amount = shot.damage;
-    const landed = this.takeHit(target, attacker, amount, shot.direction, attacker.character === "BALLHOG" ? "BLASSIC!" : "SPEARED!");
+    if (target.health <= 0 || target.invulnerable > 0) return;
+    let amount = shot.damage;
+    let shieldBroken = false;
+    if (target.shielding) {
+      const spent = Math.min(SHIELD_BEAM_BLOCK_COST, Math.max(0, target.superCharge));
+      const shortfall = SHIELD_BEAM_BLOCK_COST - spent;
+      target.superCharge = Math.max(0, target.superCharge - spent);
+      if (target.superCharge <= 0) {
+        target.shielding = false;
+        target.shieldLockedUntilRelease = true;
+      }
+      this.addBurst(target.x, target.chestY, target.accent, 8, 150);
+      if (shortfall <= 0) {
+        this.addText("SUPER BLOCK -60 METER", target.x, target.chestY - 16, target.accent);
+        return;
+      }
+      // Missing meter points become the percentage of beam damage that gets through.
+      amount *= shortfall / 100;
+      shieldBroken = true;
+    }
+    const message = shieldBroken ? `SHIELD BREAK -${amount.toFixed(1)}` : attacker.character === "BALLHOG" ? "BLASSIC!" : "SPEARED!";
+    const landed = this.takeHit(target, attacker, amount, shot.direction, message);
+    // Ballhog's damage-taken bonus must not refill a shield emptied by this beam.
+    if (shieldBroken) target.superCharge = 0;
     if (landed && attacker.character === "BALLHOG") attacker.superCharge = Math.min(100, attacker.superCharge + amount * 0.35);
     if (landed && attacker.character === "ARCHIVE") this.applyPoison(target, attacker);
   }
 
   applyPoison(target, attacker) {
     const poisonWasActive = target.poisonTime > 0 && target.poisonStacks > 0;
-    target.poisonStacks = Math.min(4, target.poisonStacks + 1);
+    target.poisonStacks = Math.min(MAX_POISON_STACKS, target.poisonStacks + 1);
     target.poisonTime = 10;
     if (!poisonWasActive) target.poisonTick = 1;
     target.poisonDps = 0.9 * target.poisonStacks;
@@ -761,8 +800,8 @@ class Game {
         const poisonSource = fighter.poisonSourcePlayer === 1 ? this.p1 : this.p2;
         fighter.health = Math.max(0, fighter.health - fighter.poisonDps);
         if (poisonSource.character === "ARCHIVE") {
-          // Each active stack adds super charge, so a full four-stack poison
-          // pays Archive 8 meter per second while it deals 3.6 damage per tick.
+          // At three stacks, poison pays Archive 6 meter per second
+          // while dealing 2.7 damage per tick.
           poisonSource.superCharge = Math.min(100, poisonSource.superCharge + fighter.poisonStacks * 2);
         }
         this.addText(`POISON x${fighter.poisonStacks} -${fighter.poisonDps.toFixed(1)}`, fighter.x, fighter.chestY - 25, CYAN);
@@ -978,18 +1017,10 @@ class Game {
     const walking = preview ? 0 : (f.grounded ? Math.min(1, Math.abs(f.vx) / Math.max(1, f.speed)) : 0);
     const airborne = !preview && !f.grounded ? 1 : 0;
     const swingDuration = f.character === "BALLHOG" ? BALLHOG_SWING_DURATION : 0.27;
-    const attackPose = !preview && f.attackTime >= 0 && f.attackTime < swingDuration
-      ? Math.sin(gameClamp(f.attackTime / swingDuration, 0, 1) * Math.PI)
-      : 0;
-    const breathing = Math.sin(f.animationTime * 3.1) * 1.8 * (preview ? 1 : 1 - walking);
     const phase = Math.sin(f.walkPhase) * 8 * walking;
     const armSwing = Math.sin(f.walkPhase) * 6 * walking;
-    const hitLean = !preview && f.hitstun > 0 ? -Math.sign(f.vx || direction) * 5 : 0;
-    const bodyX = x + direction * attackPose * 5 + hitLean;
-    const bodyBob = breathing + Math.sin(f.walkPhase * 2) * 2.2 * walking - airborne * 3;
+    const { bodyX, bodyTop, bodyBottom, bodyBob } = this.fighterBodyGeometry(f, visualX, preview);
     const skin = f.character === "BALLHOG" ? [207, 157, 120] : [220, 178, 151];
-    const bodyTop = foot - f.h + 34 + bodyBob;
-    const bodyBottom = foot - (f.character === "BALLHOG" ? 40 : 48) + bodyBob;
     const headCY = foot - f.h + (f.character === "BALLHOG" ? 18 : 19) + bodyBob;
     const flashing = f.flash > 0;
     const shirt = flashing ? [255, 247, 229] : (f.character === "BALLHOG" ? [45, 44, 51] : [94, 34, 48]);
@@ -1142,10 +1173,10 @@ class Game {
         // The broad translucent pass fakes a glow without blur filters.
         stroke(vfxTint[0], vfxTint[1], vfxTint[2], 32 * arcStrength);
         strokeWeight(17);
-        arc(bodyX, bodyTop - 48, 110, 116, Math.PI * 1.08, Math.PI * 1.92);
+        arc(bodyX, bodyTop - 48, VERTICAL_ATTACK_VFX_WIDTH, VERTICAL_ATTACK_VFX_HEIGHT, Math.PI * 1.08, Math.PI * 1.92);
         stroke(vfxTint[0], vfxTint[1], vfxTint[2], 210 * arcStrength);
         strokeWeight(5);
-        arc(bodyX, bodyTop - 48, 110, 116, Math.PI * 1.08, Math.PI * 1.92);
+        arc(bodyX, bodyTop - 48, VERTICAL_ATTACK_VFX_WIDTH, VERTICAL_ATTACK_VFX_HEIGHT, Math.PI * 1.08, Math.PI * 1.92);
         stroke(vfxTint[0], vfxTint[1], vfxTint[2], 210 * arcStrength);
         strokeWeight(2.2);
         line(bodyX - 36, bodyTop - 12, bodyX - 10, bodyTop - 96);
@@ -1168,10 +1199,10 @@ class Game {
         noFill();
         stroke(vfxTint[0], vfxTint[1], vfxTint[2], 32 * arcStrength);
         strokeWeight(17);
-        arc(bodyX, bodyBottom + 37, 110, 116, Math.PI * 0.08, Math.PI * 0.92);
+        arc(bodyX, bodyBottom + 37, VERTICAL_ATTACK_VFX_WIDTH, VERTICAL_ATTACK_VFX_HEIGHT, Math.PI * 0.08, Math.PI * 0.92);
         stroke(vfxTint[0], vfxTint[1], vfxTint[2], 210 * arcStrength);
         strokeWeight(5);
-        arc(bodyX, bodyBottom + 37, 110, 116, Math.PI * 0.08, Math.PI * 0.92);
+        arc(bodyX, bodyBottom + 37, VERTICAL_ATTACK_VFX_WIDTH, VERTICAL_ATTACK_VFX_HEIGHT, Math.PI * 0.08, Math.PI * 0.92);
         stroke(vfxTint[0], vfxTint[1], vfxTint[2], 210 * arcStrength);
         strokeWeight(2.2);
         line(bodyX - 36, bodyBottom + 2, bodyX - 10, bodyBottom + 83);
@@ -1252,7 +1283,7 @@ class Game {
     if (f.poisonTime > 0) {
       noStroke();
       fill(...CYAN);
-      for (let i = 0; i < Math.min(4, f.poisonStacks); i += 1) {
+      for (let i = 0; i < Math.min(MAX_POISON_STACKS, f.poisonStacks); i += 1) {
         const px = x + Math.sin(millis() / 130 + i * 2) * 18;
         const py = f.bottom - 42 - ((millis() / 5 + i * 23) % 54);
         ellipse(px, py, 6);
@@ -1526,20 +1557,115 @@ class Game {
     text(message, x, y);
   }
 
-  drawMeter(x, y, meterWidth, value, color) {
+  drawHudMeter(x, y, meterWidth, meterHeight, value, color, reverse = false, divisions = 0) {
     noStroke();
-    fill(36, 34, 44);
-    rect(x, y, meterWidth, 10, 5);
-    const fillWidth = meterWidth * value / 100;
+    fill(10, 12, 20);
+    rect(x, y, meterWidth, meterHeight, 4);
+    const fillWidth = meterWidth * gameClamp(value, 0, 100) / 100;
     if (fillWidth > 0) {
+      const fillX = reverse ? x + meterWidth - fillWidth : x;
       fill(...color);
-      rect(x, y, fillWidth, 10, 5);
+      rect(fillX, y, fillWidth, meterHeight, Math.min(4, fillWidth / 2));
+      // A flat highlight gives depth without blur, gradients or extra canvases.
+      fill(255, 255, 255, 65);
+      rect(fillX, y, fillWidth, 2, Math.min(1, fillWidth / 2));
+    }
+    if (divisions > 1) {
+      stroke(10, 12, 20, 95);
+      strokeWeight(1);
+      for (let i = 1; i < divisions; i += 1) {
+        const tickX = x + meterWidth * i / divisions;
+        line(tickX, y + 2, tickX, y + meterHeight - 2);
+      }
     }
     noFill();
-    stroke(108, 98, 107);
+    stroke(73, 77, 96);
     strokeWeight(1);
-    rect(x, y, meterWidth, 10, 5);
+    rect(x, y, meterWidth, meterHeight, 4);
     noStroke();
+  }
+
+  drawHudName(fighter, x, y) {
+    // Two text passes make a restrained glow; no per-frame shadowBlur or filters.
+    textStyle(BOLD);
+    textSize(25);
+    textAlign(LEFT, TOP);
+    stroke(fighter.accent[0], fighter.accent[1], fighter.accent[2], 38);
+    strokeWeight(5);
+    fill(fighter.accent[0], fighter.accent[1], fighter.accent[2], 90);
+    text(fighter.name, x, y);
+    noStroke();
+    fill(...fighter.accent);
+    text(fighter.name, x, y);
+  }
+
+  drawFighterHud(fighter, opponent, x, reverse) {
+    const w = 500;
+    const innerX = x + 16;
+    const innerW = w - 32;
+    const rightX = x + w - 16;
+    const muted = [163, 173, 194];
+    const healthColor = fighter.health <= 25 ? [255, 113, 123] : fighter.accent;
+    const meter = gameClamp(fighter.superCharge, 0, 100);
+
+    fill(24, 27, 39);
+    stroke(47, 52, 70);
+    strokeWeight(1);
+    rect(x, 8, w, 142, 10);
+    noStroke();
+    fill(fighter.accent[0], fighter.accent[1], fighter.accent[2], 130);
+    rect(innerX, 8, innerW, 2, 1);
+
+    const playerColor = fighter.player === 1 ? GOLD : PLAYER2_UI_BLUE;
+    fill(playerColor[0], playerColor[1], playerColor[2], 25);
+    rect(innerX, 23, 30, 18, 4);
+    this.drawLabel(`P${fighter.player}`, 11, playerColor, innerX + 15, 25, CENTER);
+    this.drawHudName(fighter, x + 60, 17);
+    const health = Math.max(0, Math.ceil(fighter.health * 10 - 1e-9) / 10);
+    this.drawLabel(`${health} / 100 HP`, 18, fighter.health <= 25 ? healthColor : CREAM, rightX, 23, RIGHT);
+
+    this.drawHudMeter(innerX, 49, innerW, 18, fighter.health, healthColor, reverse, 4);
+
+    const abilityName = fighter.character === "BALLHOG" ? "RAF SIMONS RAGE" : "ARCHIVE OVER TIME";
+    this.drawLabel(abilityName, 11, fighter.accent, innerX, 75);
+    if (fighter.character === "ARCHIVE") {
+      const poisonActive = opponent.poisonTime > 0 && opponent.poisonSourcePlayer === fighter.player;
+      const remaining = poisonActive ? Math.ceil(opponent.poisonTime * 10) / 10 : 0;
+      this.drawLabel(`POISON TIMER: ${remaining.toFixed(1)}s`, 11, poisonActive ? fighter.accent : muted, rightX, 75, RIGHT);
+    }
+    push();
+    translate(0, 18);
+
+    if (fighter.character === "BALLHOG") {
+      this.drawLabel(`DAMAGE ×${fighter.rageMultiplier.toFixed(2)}`, 14, fighter.accent, innerX, 77);
+      const bonusPercent = (fighter.rageMultiplier - 1) * 100;
+      this.drawLabel(`+${bonusPercent.toFixed(1)}%  ·  RAGE ${fighter.rageStacks}`, 12, muted, rightX, 79, RIGHT);
+    } else {
+      const active = opponent.poisonTime > 0 && opponent.poisonSourcePlayer === fighter.player;
+      const stacks = active ? opponent.poisonStacks : 0;
+      this.drawLabel(`POISON ON P${opponent.player}  ${stacks}/${MAX_POISON_STACKS}`, 14, fighter.accent, innerX, 77);
+      for (let i = 0; i < MAX_POISON_STACKS; i += 1) {
+        fill(i < stacks ? fighter.accent : [57, 64, 80]);
+        rect(x + 249 + i * 13, 80, 9, 9, 2);
+      }
+      const poisonDetail = stacks > 0
+        ? `${opponent.poisonDps.toFixed(1)} DPS`
+        : "NO ACTIVE POISON";
+      this.drawLabel(poisonDetail, 11, muted, rightX, 80, RIGHT);
+    }
+
+    const superName = fighter.character === "BALLHOG" ? "BLASSIC BLAST" : "SLIMANE SPEAR";
+    const superKey = fighter.player === 1 ? "R" : ",";
+    this.drawLabel(`${superName} [${superKey}]`, 11, muted, innerX, 102);
+    this.drawLabel("BLOCK 60%", 10, meter >= SHIELD_BEAM_BLOCK_COST ? fighter.accent : muted, x + 287, 103, CENTER);
+    this.drawLabel(meter >= 100 ? "READY 100%" : `${Math.floor(meter)}%`, 12, meter >= 100 ? CREAM : muted, rightX, 101, RIGHT);
+    this.drawHudMeter(innerX, 120, innerW, 7, meter, fighter.accent, reverse);
+    const blockTick = innerX + innerW * (reverse ? 1 - SHIELD_BEAM_BLOCK_COST / 100 : SHIELD_BEAM_BLOCK_COST / 100);
+    stroke(240, 235, 220, 200);
+    strokeWeight(1);
+    line(blockTick, 117, blockTick, 129);
+    noStroke();
+    pop();
   }
 
   drawReturnMenuProgress(x, y, w) {
@@ -1569,58 +1695,24 @@ class Game {
 
   drawHud() {
     noStroke();
-    fill(19, 18, 28);
-    rect(0, 0, WORLD_W, 122);
-    stroke(122, 54, 67);
-    strokeWeight(2);
-    line(0, 121, WORLD_W, 121);
-    noStroke();
-    this.drawLabel(this.p1.name, 26, this.p1.accent, 42, 15);
-    this.drawLabel(this.p1.character === "BALLHOG" ? "Raf Simons Rage" : "Archive Over Time", 16, [208, 178, 154], 44, 47);
-    this.drawLabel(`DAMAGE  ×${this.p1.rageMultiplier.toFixed(2)}`, 12, [235, 198, 150], 44, 69);
-    this.drawLabel(this.p2.name, 26, this.p2.accent, WORLD_W - 42, 15, RIGHT);
-    this.drawLabel(this.p2.character === "ARCHIVE" ? "Archive Over Time" : "Raf Simons Rage", 16, [184, 201, 199], WORLD_W - 44, 47, RIGHT);
-    this.drawLabel(this.p2.character === "ARCHIVE" ? "HITS APPLY 10s RESIDUAL DAMAGE" : "GAINS RAGE WHEN HIT", 12, [145, 187, 184], WORLD_W - 44, 69, RIGHT);
-
+    fill(12, 14, 23);
+    rect(0, 0, WORLD_W, 158);
+    this.drawFighterHud(this.p1, this.p2, 24, false);
+    this.drawFighterHud(this.p2, this.p1, WORLD_W - 524, true);
+    this.drawLabel("VS", 30, CREAM, WORLD_W / 2, 21, CENTER);
+    const mode = this.winner ? "ROUND OVER" : this.beamClash ? "BEAM CLASH" : this.practiceMode ? "PRACTICE" : "LOCAL DUEL";
+    this.drawLabel(mode, 11, [183, 193, 215], WORLD_W / 2, 62, CENTER);
     if (this.practiceMode) {
-      noStroke();
-      fill(12, 15, 22, 230);
-      rect(WORLD_W / 2 - 105, 35, 210, 29, 8);
-      stroke(255, 193, 83, 210);
-      strokeWeight(1.5);
-      noFill();
-      rect(WORLD_W / 2 - 105, 35, 210, 29, 8);
-      noStroke();
-      this.drawLabel("PRACTICE MODE", 15, [255, 225, 164], WORLD_W / 2, 38, CENTER);
-      this.drawLabel("7  ·  RETURN TO TITLE", 9, [200, 207, 218], WORLD_W / 2, 54, CENTER);
+      this.drawLabel("UNLIMITED SUPER", 9, GOLD, WORLD_W / 2, 84, CENTER);
+      this.drawLabel("7 · RETURN TO TITLE", 9, [163, 173, 194], WORLD_W / 2, 109, CENTER);
+    } else {
+      this.drawLabel("HOLD ~ + BACKSPACE", 9, [163, 173, 194], WORLD_W / 2, 99, CENTER);
+      this.drawLabel("RETURN TO MENU", 9, [163, 173, 194], WORLD_W / 2, 113, CENTER);
     }
-
-    const barW = 430;
-    noStroke();
-    fill(54, 35, 43);
-    rect(44, 91, barW, 17, 7);
-    fill(...this.p1.accent);
-    rect(44, 91, barW * this.p1.health / 100, 17, 7);
-    fill(54, 35, 43);
-    rect(WORLD_W - 44 - barW, 91, barW, 17, 7);
-    fill(...this.p2.accent);
-    const p2Fill = barW * this.p2.health / 100;
-    rect(WORLD_W - 44 - p2Fill, 91, p2Fill, 17, 7);
-    noFill();
-    stroke(203, 183, 163);
+    stroke(49, 55, 74);
     strokeWeight(1);
-    rect(44, 91, barW, 17, 7);
-    rect(WORLD_W - 44 - barW, 91, barW, 17, 7);
+    line(0, 157, WORLD_W, 157);
     noStroke();
-    this.drawLabel(`${Math.ceil(this.p1.health)}`, 12, INK, 54, 92);
-    this.drawLabel(`${Math.ceil(this.p2.health)}`, 12, INK, WORLD_W - 54, 92, RIGHT);
-
-    this.drawLabel((this.p1.character === "BALLHOG" ? "BLASSIC BLAST" : "SLIMANE SPEAR") + " · R", 12, [221, 203, 174], 45, 109);
-    this.drawMeter(180, 111, 294, this.p1.superCharge, this.p1.accent);
-    this.drawLabel((this.p2.character === "ARCHIVE" ? "SLIMANE SPEAR" : "BLASSIC BLAST") + " · ,", 12, [190, 212, 207], WORLD_W - 45, 109, RIGHT);
-    this.drawMeter(WORLD_W - 474, 111, 294, this.p2.superCharge, this.p2.accent);
-    if (this.p1.superCharge >= 100) this.drawLabel("READY", 12, GOLD, 480, 107);
-    if (this.p2.superCharge >= 100) this.drawLabel("READY", 12, CYAN, WORLD_W - 480, 107, RIGHT);
   }
 
   drawMapSelectScreen() {
@@ -1698,7 +1790,7 @@ class Game {
       const passive = isBallhog ? "RAF SIMONS RAGE" : "ARCHIVE OVER TIME";
       const passiveDescription = isBallhog
         ? "Every hit taken raises his damage by 15%."
-        : "Poison stacks to 4 and poison ticks charge super.";
+        : `Poison stacks to ${MAX_POISON_STACKS} and poison ticks charge super.`;
 
       drawingContext.save();
       drawingContext.shadowBlur = 22;
@@ -1859,15 +1951,17 @@ class Game {
     this.drawLabel("A / D MOVE   W DOUBLE JUMP   S + W DROP", 11, CREAM, p1X + 18, cardY + 55);
     this.drawLabel((this.p1.character === "BALLHOG" ? "HOLD E + RELEASE  ·  CHARGED ATTACK" : "E  ·  NORMAL ATTACK"), 12, [226, 215, 198], p1X + 18, cardY + 82);
     this.drawLabel("R  ·  " + (this.p1.character === "BALLHOG" ? "BLASSIC BLAST" : "SLIMANE SPEAR"), 12, [226, 215, 198], p1X + 18, cardY + 107);
-    this.drawLabel(this.p1.character === "BALLHOG" ? "Full-charge hits grant 35% super; light charges give less." : "Poison stacks to 4 and its ticks charge super.", 10, [177, 190, 190], p1X + 18, cardY + 142);
-    this.drawLabel("HOLD Q  ·  BLOCK (USES SUPER)", 10, [190, 213, 231], p1X + 18, cardY + 165);
+    this.drawLabel(this.p1.character === "BALLHOG" ? "RAF SIMONS RAGE" : "ARCHIVE OVER TIME", 11, this.p1.accent, p1X + 18, cardY + 126);
+    this.drawLabel(this.p1.character === "BALLHOG" ? "Each hit taken increases damage by 15%." : `Poison stacks to ${MAX_POISON_STACKS} and its ticks charge super.`, 10, [177, 190, 190], p1X + 18, cardY + 142);
+    this.drawLabel("HOLD Q · BLOCK · BEAM BLOCK COSTS 60 SUPER", 10, [190, 213, 231], p1X + 18, cardY + 165);
 
     this.drawLabel("PLAYER 2  ·  " + this.p2.name, 19, this.p2.accent, p2X + 18, cardY + 18);
     this.drawLabel("← / → MOVE   ↑ DOUBLE JUMP   ↓ + ↑ DROP", 11, CREAM, p2X + 18, cardY + 55);
     this.drawLabel("/  ·  NORMAL ATTACK", 12, [211, 225, 222], p2X + 18, cardY + 82);
     this.drawLabel(",  ·  " + (this.p2.character === "ARCHIVE" ? "SLIMANE SPEAR" : "BLASSIC BLAST"), 12, [211, 225, 222], p2X + 18, cardY + 107);
-    this.drawLabel(this.p2.character === "BALLHOG" ? "Full-charge hits grant 35% super; light charges give less." : "Poison stacks to 4 and its ticks charge super.", 10, [177, 190, 190], p2X + 18, cardY + 142);
-    this.drawLabel("HOLD .  ·  BLOCK (USES SUPER)", 10, [190, 213, 231], p2X + 18, cardY + 165);
+    this.drawLabel(this.p2.character === "BALLHOG" ? "RAF SIMONS RAGE" : "ARCHIVE OVER TIME", 11, this.p2.accent, p2X + 18, cardY + 126);
+    this.drawLabel(this.p2.character === "BALLHOG" ? "Each hit taken increases damage by 15%." : `Poison stacks to ${MAX_POISON_STACKS} and its ticks charge super.`, 10, [177, 190, 190], p2X + 18, cardY + 142);
+    this.drawLabel("HOLD . · BLOCK · BEAM BLOCK COSTS 60 SUPER", 10, [190, 213, 231], p2X + 18, cardY + 165);
 
     const orbY = 523, orbH = 128;
     noStroke(); fill(13, 14, 24, 247); rect(432, orbY, 780, orbH, 13);
