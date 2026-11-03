@@ -1,4 +1,4 @@
-# Ballhog vs Archive · Version 3.3: Beam mechanic overhual + ballhog buff!
+## Ballhog vs Archive · Version 3.3: Beam mechanic overhual + ballhog buff!
 
 ## UPDATE DESCRIPTION:
 Over all ultimate beams (slimane spear and blassic blast) function a lot more Smoothly. Beams now have a moving hitbox so damage isnt instant. this effects its interactions with players as well as other beams (for beam clashing).
