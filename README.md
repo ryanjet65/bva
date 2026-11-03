@@ -2,7 +2,7 @@
 
 ### UPDATE DESCRIPTION:
 using sheild to block a beam requires at least 60% ultiamte, if the player doesnt have that than what ever remaining ultimate needs to be taken from their bar will turn into a percent of the damage taken by getting hit by the beam. hitboxes are smaller and more accurate. revamped player cards in the start screen aswell as more informational health bar+stat dsiplays in game.
-
+###### press s+w to phase through platforms (feature will be removed soon)
 ### PLAY:
 # https://ryanjet65.github.io/bva/
 
